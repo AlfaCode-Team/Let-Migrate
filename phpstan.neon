@@ -1,0 +1,10 @@
+parameters:
+    level: 8
+    paths:
+        - src
+    excludePaths:
+        - tests/
+        - vendor/
+    checkMissingIterableValueType: false
+    reportUnmatchedIgnoredErrors: false
+    treatPhpDocTypesAsCertain: false
