@@ -18,16 +18,6 @@ final class MySQLGrammar extends AbstractGrammar
 {
     protected string $quoteChar = '`';
 
-    protected function compileTableOptions(Blueprint $blueprint): string
-    {
-        return sprintf(
-            ' ENGINE=%s DEFAULT CHARSET=%s COLLATE=%s',
-            $blueprint->getEngine(),
-            $blueprint->getCharset(),
-            $blueprint->getCollation(),
-        );
-    }
-
     public function compileCreateMigrationTable(string $tableName): string
     {
         $t = $this->quoteIdentifier($tableName);
@@ -50,6 +40,16 @@ final class MySQLGrammar extends AbstractGrammar
     public function compileForeignKeyChecksOn(): string
     {
         return 'SET FOREIGN_KEY_CHECKS = 1';
+    }
+
+    protected function compileTableOptions(Blueprint $blueprint): string
+    {
+        return sprintf(
+            ' ENGINE=%s DEFAULT CHARSET=%s COLLATE=%s',
+            $blueprint->getEngine(),
+            $blueprint->getCharset(),
+            $blueprint->getCollation(),
+        );
     }
 
     protected function compileDropIndex(string $quotedTable, string $indexName): string

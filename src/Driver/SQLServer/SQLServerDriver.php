@@ -17,24 +17,19 @@ final class SQLServerDriver extends AbstractPdoDriver
         private readonly string $database,
         private readonly string $username,
         private readonly string $password,
-        private readonly string $schema  = 'dbo',
+        private readonly string $schema = 'dbo',
         private readonly array  $options = [],
     ) {}
 
-    protected function createConnection(): \PDO
+    public function getName(): string
     {
-        // Use sqlsrv extension if available, fall back to dblib (Linux / FreeTDS)
-        if (in_array('sqlsrv', \PDO::getAvailableDrivers(), true)) {
-            $dsn = "sqlsrv:Server={$this->host},{$this->port};Database={$this->database}";
-        } else {
-            $dsn = "dblib:host={$this->host}:{$this->port};dbname={$this->database}";
-        }
-
-        return new \PDO($dsn, $this->username, $this->password, $this->options);
+        return 'sqlsrv';
     }
 
-    public function getName(): string         { return 'sqlsrv'; }
-    public function getPlatformName(): string  { return 'sqlsrv'; }
+    public function getPlatformName(): string
+    {
+        return 'sqlsrv';
+    }
 
     public function quoteIdentifier(string $identifier): string
     {
@@ -44,7 +39,7 @@ final class SQLServerDriver extends AbstractPdoDriver
     public function tableExists(string $table): bool
     {
         $row = $this->fetchOne(
-            "SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?",
+            'SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?',
             [$this->schema, $table],
         );
 
@@ -54,7 +49,7 @@ final class SQLServerDriver extends AbstractPdoDriver
     public function columnExists(string $table, string $column): bool
     {
         $row = $this->fetchOne(
-            "SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?",
+            'SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?',
             [$this->schema, $table, $column],
         );
 
@@ -64,7 +59,7 @@ final class SQLServerDriver extends AbstractPdoDriver
     public function listColumns(string $table): array
     {
         $rows = $this->fetchAll(
-            "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION",
+            'SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION',
             [$this->schema, $table],
         );
 
@@ -79,5 +74,17 @@ final class SQLServerDriver extends AbstractPdoDriver
         );
 
         return array_column($rows, 'TABLE_NAME');
+    }
+
+    protected function createConnection(): \PDO
+    {
+        // Use sqlsrv extension if available, fall back to dblib (Linux / FreeTDS)
+        if (in_array('sqlsrv', \PDO::getAvailableDrivers(), true)) {
+            $dsn = "sqlsrv:Server={$this->host},{$this->port};Database={$this->database}";
+        } else {
+            $dsn = "dblib:host={$this->host}:{$this->port};dbname={$this->database}";
+        }
+
+        return new \PDO($dsn, $this->username, $this->password, $this->options);
     }
 }

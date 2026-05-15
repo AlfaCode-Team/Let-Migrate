@@ -4,21 +4,18 @@ declare(strict_types=1);
 
 namespace AlfaCode\LetMigrate;
 
-use AlfaCode\LetMigrate\MigrationConfig;
+use AlfaCode\LetMigrate\Contract\MigrationInterface;
+use AlfaCode\LetMigrate\Contract\MigrationServiceInterface;
 use AlfaCode\LetMigrate\Event\MigrationEventDispatcher;
-use AlfaCode\LetMigrate\DatabaseMigrationRepository;
-use AlfaCode\LetMigrate\FilesystemMigrationResolver;
-use AlfaCode\LetMigrate\MigrationResult;
-use AlfaCode\LetMigrate\MigrationRunner;
-use AlfaCode\LetMigrate\DriverRegistry;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
 /**
- * LetMigrate — main facade.
+ * LetMigrate — public-facing facade.
  *
  * This is the single class most application bootstrappers need to touch.
- * It wires the registry, repository, resolver, and runner together.
+ * It delegates all work to MigrationService through MigrationServiceFactory,
+ * keeping the repository entirely hidden from application code.
  *
  * ─────────────────────────────────────────────────────────────────
  * Minimal bootstrap
@@ -37,121 +34,118 @@ use Psr\Log\NullLogger;
  *   echo $result->summary();
  *
  * ─────────────────────────────────────────────────────────────────
- * Per-driver migration paths
+ * With a pre-built DriverRegistry (tests / custom DI containers)
  * ─────────────────────────────────────────────────────────────────
  *
- *   'paths' => [
- *       __DIR__ . '/migrations/mysql',        // MySQL-specific DDL
- *       __DIR__ . '/migrations/shared',       // driver-agnostic seeds
- *   ]
+ *   $engine = LetMigrate::fromRegistry(
+ *       DriverRegistry::fromDriverAndGrammar($driver, $grammar),
+ *       ['paths' => [$migrationsDir]],
+ *   );
  *
  * ─────────────────────────────────────────────────────────────────
- * With event listeners and PSR-3 logger
+ * Event hooks
  * ─────────────────────────────────────────────────────────────────
  *
- *   $engine = LetMigrate::configure($config, $logger);
- *   $engine->events()->on(MigrationFailed::class, fn($e) => sentry($e->exception));
+ *   $engine->events()->on(MigrationFailed::class, fn($e) => report($e->exception));
  *   $engine->run();
  */
 final class LetMigrate
 {
-    private MigrationRunner           $runner;
-    private MigrationEventDispatcher  $events;
+    private readonly MigrationServiceInterface $service;
 
     private function __construct(
         private readonly DriverRegistry $registry,
-        MigrationConfig                 $config,
-        LoggerInterface                 $logger,
+        MigrationServiceInterface       $service,
     ) {
-        $this->events = new MigrationEventDispatcher();
-
-        $schema     = $this->registry->schemaBuilder();
-        $grammar    = $this->registry->grammar();
-        $driver     = $this->registry->driver();
-
-        $repository = new DatabaseMigrationRepository($driver, $grammar, $config->trackingTable);
-        $resolver   = new FilesystemMigrationResolver($config->paths);
-
-        $this->runner = new MigrationRunner(
-            repository: $repository,
-            resolver:   $resolver,
-            schema:     $schema,
-            events:     $this->events,
-            logger:     $logger,
-            pretend:    $config->pretend,
-        );
+        $this->service = $service;
     }
 
-    // ── Factory ───────────────────────────────────────────────────
+    // ── Factory methods ───────────────────────────────────────────
 
     /**
      * Create a LetMigrate engine from a flat config array.
      *
-     * Recognised top-level keys (in addition to driver-specific ones):
+     * Recognised keys (in addition to driver-specific ones):
+     *   driver         string    — 'mysql' | 'pgsql' | 'sqlite' | 'sqlsrv'
      *   paths          string[]  — migration directories (required)
-     *   tracking_table string    — name of the migration tracking table (default: 'let_migrations')
-     *   pretend        bool      — log SQL without executing (default: false)
+     *   path           string    — single migration directory (alias for paths)
+     *   tracking_table string    — override migration tracking table name
+     *   pretend        bool      — log SQL without executing
      *
      * @param array<string, mixed> $config
      */
     public static function configure(
         array           $config,
-        LoggerInterface $logger  = new NullLogger(),
+        LoggerInterface $logger = new NullLogger(),
     ): self {
-        $migrationConfig = MigrationConfig::fromArray($config);
-        $registry        = DriverRegistry::fromConfig($config);
+        $registry = DriverRegistry::fromConfig($config);
+        $service = MigrationServiceFactory::create(
+            $registry,
+            MigrationConfig::fromArray($config),
+            $logger,
+        );
 
-        return new self($registry, $migrationConfig, $logger);
+        return new self($registry, $service);
     }
 
     /**
-     * Create from a pre-built DriverRegistry (useful when you manage the
-     * connection lifecycle yourself or in tests).
+     * Create from a pre-built DriverRegistry.
+     *
+     * Useful when you manage the connection lifecycle yourself or in tests:
+     *
+     *   LetMigrate::fromRegistry(
+     *       DriverRegistry::fromDriverAndGrammar($driver, $grammar),
+     *       ['paths' => [$migrationsDir]],
+     *   );
      *
      * @param array<string, mixed> $config
      */
     public static function fromRegistry(
         DriverRegistry  $registry,
-        array           $config  = [],
-        LoggerInterface $logger  = new NullLogger(),
+        array           $config = [],
+        LoggerInterface $logger = new NullLogger(),
     ): self {
-        $migrationConfig = MigrationConfig::fromArray($config);
+        $service = MigrationServiceFactory::create(
+            $registry,
+            MigrationConfig::fromArray($config),
+            $logger,
+        );
 
-        return new self($registry, $migrationConfig, $logger);
+        return new self($registry, $service);
     }
 
-    // ── Operations ────────────────────────────────────────────────
+    // ── Delegated operations ──────────────────────────────────────
 
     /**
      * Apply all pending migrations.
      */
     public function run(): MigrationResult
     {
-        return $this->runner->run();
+        return $this->service->run();
     }
 
     /**
-     * Reverse the last N batches of migrations.
+     * Reverse the last N batches.
      */
     public function rollback(int $steps = 1): MigrationResult
     {
-        return $this->runner->rollback($steps);
+        return $this->service->rollback($steps);
     }
 
     /**
-     * Roll back ALL migrations (destructive — dev/test only).
+     * Roll back ALL migrations (destructive — dev / test only).
      */
     public function reset(): MigrationResult
     {
-        return $this->runner->reset();
+        return $this->service->reset();
     }
 
     /**
-     * Reset then re-run all migrations (destructive — dev/test only).
+     * Reset then re-run all migrations (destructive — dev / test only).
      */
     public function refresh(): MigrationResult
     {
-        return $this->runner->refresh();
+        return $this->service->refresh();
     }
 
     /**
@@ -161,24 +155,24 @@ final class LetMigrate
      */
     public function status(): array
     {
-        return $this->runner->status();
+        return $this->service->status();
     }
 
     /**
      * Return migrations that have not yet been applied.
      *
-     * @return array<string, \AlfaCode\LetMigrate\Contract\MigrationInterface>
+     * @return array<string, MigrationInterface>
      */
     public function pending(): array
     {
-        return $this->runner->pending();
+        return $this->service->pending();
     }
 
     // ── Accessors ─────────────────────────────────────────────────
 
     public function events(): MigrationEventDispatcher
     {
-        return $this->events;
+        return $this->service->events();
     }
 
     public function registry(): DriverRegistry
@@ -186,8 +180,12 @@ final class LetMigrate
         return $this->registry;
     }
 
-    public function runner(): MigrationRunner
+    /**
+     * Access the underlying service for advanced use.
+     * Prefer the methods above for standard application code.
+     */
+    public function service(): MigrationServiceInterface
     {
-        return $this->runner;
+        return $this->service;
     }
 }

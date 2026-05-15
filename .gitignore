@@ -1,0 +1,54 @@
+# ── COMPOSER ──────────────────────────────────────────────────
+/vendor/
+migrations/
+#(Uncomment if you want to ignore lock file for the library)
+composer.lock 
+
+
+# ── TESTING & COVERAGE ────────────────────────────────────────
+/.phpunit.cache/
+.phpunit.result.cache
+/coverage/
+/coverage-html/
+coverage.xml
+clover.xml
+phpunit.xml
+!phpunit.xml.dist
+infection.log
+
+# ── STATIC ANALYSIS & REFACTORING CACHES ──────────────────────
+.php-cs-fixer.cache
+/.phpstan.cache/
+/.rector/
+phpstan-results.json
+
+# ── PROFILING & DEBUGGING (Xdebug) ────────────────────────────
+cachegrind.out.*
+xdebug.log
+error_log
+php_errors.log
+
+# ── BUILD ARTIFACTS (If you compile the CLI) ──────────────────
+/build/
+/dist/
+*.phar
+
+# ── ENVIRONMENT & DOCKER ──────────────────────────────────────
+.env
+.env.*.local
+docker-compose.override.yml
+docker-compose.local.yml
+
+# ── OS & IDEs ─────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+Thumbs.db
+ehthumbs.db
+/.idea/
+/.vscode/
+*.swp
+*.swo
+*~

@@ -15,20 +15,19 @@ final class SQLiteDriver extends AbstractPdoDriver
 {
     public function __construct(
         private readonly string $path,
-        private readonly array  $options = [],
-    ) {}
-
-    protected function createConnection(): \PDO
-    {
-        $pdo = new \PDO("sqlite:{$this->path}", '', '', $this->options);
-        $pdo->exec('PRAGMA foreign_keys = ON');
-        $pdo->exec('PRAGMA journal_mode = WAL');
-
-        return $pdo;
+        private readonly array $options = [],
+    ) {
     }
 
-    public function getName(): string         { return 'sqlite'; }
-    public function getPlatformName(): string  { return 'sqlite'; }
+    public function getName(): string
+    {
+        return 'sqlite';
+    }
+
+    public function getPlatformName(): string
+    {
+        return 'sqlite';
+    }
 
     public function quoteIdentifier(string $identifier): string
     {
@@ -62,5 +61,18 @@ final class SQLiteDriver extends AbstractPdoDriver
         $rows = $this->fetchAll("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name");
 
         return array_column($rows, 'name');
+    }
+
+    protected function createConnection(): \PDO
+    {
+        if (!is_dir(dirname($this->path))) {
+            mkdir(dirname($this->path), 0777, true);
+        }
+        
+        $pdo = new \PDO("sqlite:{$this->path}", '', '', $this->options);
+        $pdo->exec('PRAGMA foreign_keys = ON');
+        $pdo->exec('PRAGMA journal_mode = WAL');
+
+        return $pdo;
     }
 }

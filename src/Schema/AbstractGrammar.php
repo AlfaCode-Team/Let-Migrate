@@ -22,12 +22,12 @@ abstract class AbstractGrammar implements GrammarInterface
 
     public function compileCreate(Blueprint $blueprint): string
     {
-        $table   = $this->quoteIdentifier($blueprint->getTable());
+        $table = $this->quoteIdentifier($blueprint->getTable());
         $columns = $this->compileColumns($blueprint);
         $indexes = $this->compileIndexes($blueprint);
-        $fks     = $this->compileForeignKeys($blueprint);
-        $parts   = array_filter(array_merge($columns, $indexes, $fks));
-        $body    = implode(',' . PHP_EOL . '    ', $parts);
+        $fks = $this->compileForeignKeys($blueprint);
+        $parts = array_filter(array_merge($columns, $indexes, $fks));
+        $body = implode(',' . PHP_EOL . '    ', $parts);
         $options = $this->compileTableOptions($blueprint);
 
         return 'CREATE TABLE ' . $table . ' (' . PHP_EOL . '    ' . $body . PHP_EOL . ')' . $options;
@@ -35,8 +35,8 @@ abstract class AbstractGrammar implements GrammarInterface
 
     public function compileAlter(Blueprint $blueprint): array
     {
-        $table    = $this->quoteIdentifier($blueprint->getTable());
-        $clauses  = [];
+        $table = $this->quoteIdentifier($blueprint->getTable());
+        $clauses = [];
 
         // Dropped columns
         foreach ($blueprint->getDroppedColumns() as $col) {
@@ -99,7 +99,7 @@ abstract class AbstractGrammar implements GrammarInterface
     public function wrapDefault(mixed $value): string
     {
         // Detect raw SQL expressions (CURRENT_TIMESTAMP, NULL, etc.)
-        if (is_string($value) && preg_match('/^[A-Z_()]+$/', strtoupper($value))) {
+        if (is_string($value) && preg_match('/^[A-Z_()]+$/', mb_strtoupper($value))) {
             return $value;
         }
 
@@ -143,11 +143,11 @@ abstract class AbstractGrammar implements GrammarInterface
     /** @return string[] */
     protected function compileColumns(Blueprint $blueprint): array
     {
-        $cols     = [];
+        $cols = [];
         $hasPkCol = false;
 
         foreach ($blueprint->getColumns() as $col) {
-            $cols[]   = $this->compileColumn($col);
+            $cols[] = $this->compileColumn($col);
             if ($col->isPrimary() && !$col->isAutoIncrement()) {
                 $hasPkCol = true;
             }
@@ -157,6 +157,7 @@ abstract class AbstractGrammar implements GrammarInterface
         foreach ($blueprint->getColumns() as $col) {
             if ($col->isPrimary() && !$col->isAutoIncrement()) {
                 $cols[] = 'PRIMARY KEY (' . $this->quoteIdentifier($col->getName()) . ')';
+
                 break;
             }
         }
@@ -215,8 +216,8 @@ abstract class AbstractGrammar implements GrammarInterface
 
         return match ($idx->getType()) {
             IndexDefinition::TYPE_PRIMARY => "PRIMARY KEY ({$cols})",
-            IndexDefinition::TYPE_UNIQUE  => "UNIQUE KEY {$this->indexName($idx)} ({$cols})",
-            default                       => "INDEX {$this->indexName($idx)} ({$cols})",
+            IndexDefinition::TYPE_UNIQUE => "UNIQUE KEY {$this->indexName($idx)} ({$cols})",
+            default => "INDEX {$this->indexName($idx)} ({$cols})",
         };
     }
 
@@ -237,12 +238,12 @@ abstract class AbstractGrammar implements GrammarInterface
 
     protected function compileForeignKey(ForeignKeyDefinition $fk): string
     {
-        $name       = $fk->getConstraintName() !== ''
+        $name = $fk->getConstraintName() !== ''
             ? $this->quoteIdentifier($fk->getConstraintName())
             : $this->quoteIdentifier('fk_' . $fk->getColumn());
-        $col        = $this->quoteIdentifier($fk->getColumn());
-        $refTable   = $this->quoteIdentifier($fk->getReferencedTable());
-        $refCol     = $this->quoteIdentifier($fk->getReferencedColumn());
+        $col = $this->quoteIdentifier($fk->getColumn());
+        $refTable = $this->quoteIdentifier($fk->getReferencedTable());
+        $refCol = $this->quoteIdentifier($fk->getReferencedColumn());
 
         return "CONSTRAINT {$name} FOREIGN KEY ({$col}) REFERENCES {$refTable} ({$refCol})"
              . " ON DELETE {$fk->getOnDelete()}"

@@ -62,7 +62,7 @@ final class MigrationEventDispatcher
      *
      * @param class-string<MigrationEvent> $eventClass
      */
-    public function off(string $eventClass, ?callable $listener = null): self
+    public function off(string $eventClass, callable|null $listener = null): self
     {
         if ($listener === null) {
             unset($this->listeners[$eventClass]);
@@ -86,7 +86,7 @@ final class MigrationEventDispatcher
      */
     public function dispatch(MigrationEvent $event): void
     {
-        $class = get_class($event);
+        $class = $event::class;
 
         foreach ($this->listeners[$class] ?? [] as $listener) {
             $listener($event);

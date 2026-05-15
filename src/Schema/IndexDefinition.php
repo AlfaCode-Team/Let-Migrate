@@ -10,8 +10,10 @@ namespace AlfaCode\LetMigrate\Schema;
 final class IndexDefinition
 {
     public const TYPE_PRIMARY = 'PRIMARY';
-    public const TYPE_UNIQUE  = 'UNIQUE';
-    public const TYPE_INDEX   = 'INDEX';
+
+    public const TYPE_UNIQUE = 'UNIQUE';
+
+    public const TYPE_INDEX = 'INDEX';
 
     /**
      * @param string[] $columns
@@ -40,9 +42,19 @@ final class IndexDefinition
         return new self(self::TYPE_INDEX, $columns, $name);
     }
 
-    public function getType(): string    { return $this->type; }
+    public function getType(): string
+    {
+        return $this->type;
+    }
 
     /** @return string[] */
-    public function getColumns(): array  { return $this->columns; }
-    public function getName(): string    { return $this->name; }
+    public function getColumns(): array
+    {
+        return $this->columns;
+    }
+
+    public function getName(): string
+    {
+        return $this->name;
+    }
 }

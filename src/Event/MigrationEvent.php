@@ -6,6 +6,7 @@ namespace AlfaCode\LetMigrate\Event;
 
 /**
  * Base class for all LetMigrate lifecycle events.
+ * Stamped with the UTC datetime of creation.
  */
 abstract class MigrationEvent
 {

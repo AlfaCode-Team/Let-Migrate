@@ -4,11 +4,17 @@ declare(strict_types=1);
 
 namespace AlfaCode\LetMigrate\Tests\Unit;
 
-use AlfaCode\LetMigrate\Config\MigrationConfig;
+use AlfaCode\LetMigrate\MigrationConfig;
 use AlfaCode\LetMigrate\MigrationResult;
 use PHPUnit\Framework\TestCase;
 
-final class MigrationConfigTest extends TestCase
+/**
+ * Combined backward-compat test that mirrors the existing
+ * tests/Unit/MigrationConfigAndResultTest.php but uses the new sub-namespaces.
+ * The original file imported from AlfaCode\LetMigrate\Config\MigrationConfig
+ * and AlfaCode\LetMigrate\MigrationResult — both now resolve correctly.
+ */
+final class MigrationConfigAndResultTest extends TestCase
 {
     // ── MigrationConfig ───────────────────────────────────────────
 
@@ -42,7 +48,7 @@ final class MigrationConfigTest extends TestCase
     public function test_from_array_respects_custom_tracking_table(): void
     {
         $config = MigrationConfig::fromArray([
-            'paths'          => ['/tmp'],
+            'paths' => ['/tmp'],
             'tracking_table' => 'my_migrations',
         ]);
 
@@ -52,7 +58,7 @@ final class MigrationConfigTest extends TestCase
     public function test_from_array_respects_pretend_flag(): void
     {
         $config = MigrationConfig::fromArray([
-            'paths'   => ['/tmp'],
+            'paths' => ['/tmp'],
             'pretend' => true,
         ]);
 
@@ -66,10 +72,7 @@ final class MigrationConfigTest extends TestCase
 
         new MigrationConfig(paths: []);
     }
-}
 
-final class MigrationResultTest extends TestCase
-{
     // ── MigrationResult ───────────────────────────────────────────
 
     public function test_empty_result_has_no_applied_or_rolled_back(): void
@@ -84,9 +87,9 @@ final class MigrationResultTest extends TestCase
     public function test_applied_count_matches_array_length(): void
     {
         $result = new MigrationResult(
-            applied:    ['mig_a', 'mig_b', 'mig_c'],
+            applied: ['mig_a', 'mig_b', 'mig_c'],
             rolledBack: [],
-            batch:      1,
+            batch: 1,
         );
 
         $this->assertSame(3, $result->appliedCount());
@@ -96,9 +99,9 @@ final class MigrationResultTest extends TestCase
     public function test_rolled_back_count_matches_array_length(): void
     {
         $result = new MigrationResult(
-            applied:    [],
+            applied: [],
             rolledBack: ['mig_x', 'mig_y'],
-            batch:      0,
+            batch: 0,
         );
 
         $this->assertSame(2, $result->rolledBackCount());
@@ -112,9 +115,9 @@ final class MigrationResultTest extends TestCase
     public function test_summary_for_applied_result(): void
     {
         $result = new MigrationResult(
-            applied:    ['a', 'b'],
+            applied: ['a', 'b'],
             rolledBack: [],
-            batch:      3,
+            batch: 3,
         );
 
         $summary = $result->summary();
@@ -125,9 +128,9 @@ final class MigrationResultTest extends TestCase
     public function test_summary_for_rollback_result(): void
     {
         $result = new MigrationResult(
-            applied:    [],
+            applied: [],
             rolledBack: ['c'],
-            batch:      0,
+            batch: 0,
         );
 
         $this->assertStringContainsString('1 migration(s) rolled back', $result->summary());
