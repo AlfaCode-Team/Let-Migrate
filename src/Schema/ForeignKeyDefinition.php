@@ -16,10 +16,14 @@ namespace AlfaCode\LetMigrate\Schema;
 final class ForeignKeyDefinition
 {
     private string $referencedColumn = 'id';
-    private string $referencedTable  = '';
-    private string $onDelete         = 'RESTRICT';
-    private string $onUpdate         = 'RESTRICT';
-    private string $constraintName   = '';
+
+    private string $referencedTable = '';
+
+    private string $onDelete = 'RESTRICT';
+
+    private string $onUpdate = 'RESTRICT';
+
+    private string $constraintName = '';
 
     public function __construct(private readonly string $column) {}
 
@@ -39,14 +43,14 @@ final class ForeignKeyDefinition
 
     public function onDelete(string $action): self
     {
-        $this->onDelete = strtoupper($action);
+        $this->onDelete = mb_strtoupper($action);
 
         return $this;
     }
 
     public function onUpdate(string $action): self
     {
-        $this->onUpdate = strtoupper($action);
+        $this->onUpdate = mb_strtoupper($action);
 
         return $this;
     }
@@ -58,17 +62,55 @@ final class ForeignKeyDefinition
         return $this;
     }
 
-    public function cascadeOnDelete(): self  { return $this->onDelete('CASCADE'); }
-    public function nullOnDelete(): self     { return $this->onDelete('SET NULL'); }
-    public function restrictOnDelete(): self { return $this->onDelete('RESTRICT'); }
-    public function cascadeOnUpdate(): self  { return $this->onUpdate('CASCADE'); }
+    public function cascadeOnDelete(): self
+    {
+        return $this->onDelete('CASCADE');
+    }
+
+    public function nullOnDelete(): self
+    {
+        return $this->onDelete('SET NULL');
+    }
+
+    public function restrictOnDelete(): self
+    {
+        return $this->onDelete('RESTRICT');
+    }
+
+    public function cascadeOnUpdate(): self
+    {
+        return $this->onUpdate('CASCADE');
+    }
 
     // ── Accessors ─────────────────────────────────────────────────
 
-    public function getColumn(): string            { return $this->column; }
-    public function getReferencedColumn(): string  { return $this->referencedColumn; }
-    public function getReferencedTable(): string   { return $this->referencedTable; }
-    public function getOnDelete(): string          { return $this->onDelete; }
-    public function getOnUpdate(): string          { return $this->onUpdate; }
-    public function getConstraintName(): string    { return $this->constraintName; }
+    public function getColumn(): string
+    {
+        return $this->column;
+    }
+
+    public function getReferencedColumn(): string
+    {
+        return $this->referencedColumn;
+    }
+
+    public function getReferencedTable(): string
+    {
+        return $this->referencedTable;
+    }
+
+    public function getOnDelete(): string
+    {
+        return $this->onDelete;
+    }
+
+    public function getOnUpdate(): string
+    {
+        return $this->onUpdate;
+    }
+
+    public function getConstraintName(): string
+    {
+        return $this->constraintName;
+    }
 }

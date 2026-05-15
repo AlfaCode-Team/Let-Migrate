@@ -40,8 +40,10 @@ final class Blueprint
     /** @var string[] */
     private array $droppedForeignKeys = [];
 
-    private string $engine  = 'InnoDB';
+    private string $engine = 'InnoDB';
+
     private string $charset = 'utf8mb4';
+
     private string $collation = 'utf8mb4_unicode_ci';
 
     public function __construct(private readonly string $table) {}
@@ -303,29 +305,61 @@ final class Blueprint
 
     // ── Accessors (used by SchemaBuilder / GrammarInterface) ──────
 
-    public function getTable(): string { return $this->table; }
+    public function getTable(): string
+    {
+        return $this->table;
+    }
 
     /** @return ColumnDefinition[] */
-    public function getColumns(): array { return $this->columns; }
+    public function getColumns(): array
+    {
+        return $this->columns;
+    }
 
     /** @return IndexDefinition[] */
-    public function getIndexes(): array { return $this->indexes; }
+    public function getIndexes(): array
+    {
+        return $this->indexes;
+    }
 
     /** @return ForeignKeyDefinition[] */
-    public function getForeignKeys(): array { return $this->foreignKeys; }
+    public function getForeignKeys(): array
+    {
+        return $this->foreignKeys;
+    }
 
     /** @return string[] */
-    public function getDroppedColumns(): array { return $this->droppedColumns; }
+    public function getDroppedColumns(): array
+    {
+        return $this->droppedColumns;
+    }
 
     /** @return string[] */
-    public function getDroppedIndexes(): array { return $this->droppedIndexes; }
+    public function getDroppedIndexes(): array
+    {
+        return $this->droppedIndexes;
+    }
 
     /** @return string[] */
-    public function getDroppedForeignKeys(): array { return $this->droppedForeignKeys; }
+    public function getDroppedForeignKeys(): array
+    {
+        return $this->droppedForeignKeys;
+    }
 
-    public function getEngine(): string    { return $this->engine; }
-    public function getCharset(): string   { return $this->charset; }
-    public function getCollation(): string { return $this->collation; }
+    public function getEngine(): string
+    {
+        return $this->engine;
+    }
+
+    public function getCharset(): string
+    {
+        return $this->charset;
+    }
+
+    public function getCollation(): string
+    {
+        return $this->collation;
+    }
 
     // ── Private helpers ────────────────────────────────────────────
 

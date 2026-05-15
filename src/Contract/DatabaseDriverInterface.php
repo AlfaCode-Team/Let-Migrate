@@ -28,16 +28,18 @@ interface DatabaseDriverInterface
     /**
      * Fetch a single row, or null if no result.
      *
-     * @return array<string, mixed>|null
      * @throws \AlfaCode\LetMigrate\Exception\QueryException
+     *
+     * @return array<string, mixed>|null
      */
-    public function fetchOne(string $sql, array $bindings = []): ?array;
+    public function fetchOne(string $sql, array $bindings = []): array|null;
 
     /**
      * Fetch all rows.
      *
-     * @return array<int, array<string, mixed>>
      * @throws \AlfaCode\LetMigrate\Exception\QueryException
+     *
+     * @return array<int, array<string, mixed>>
      */
     public function fetchAll(string $sql, array $bindings = []): array;
 
@@ -45,6 +47,7 @@ interface DatabaseDriverInterface
      * Insert a row and return the last-insert ID.
      *
      * @param array<string, mixed> $data
+     *
      * @throws \AlfaCode\LetMigrate\Exception\QueryException
      */
     public function insert(string $table, array $data): int;

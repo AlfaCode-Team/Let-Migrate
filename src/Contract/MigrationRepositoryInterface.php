@@ -4,11 +4,19 @@ declare(strict_types=1);
 
 namespace AlfaCode\LetMigrate\Contract;
 
-use AlfaCode\LetMigrate\Migration\MigrationRecord;
+use AlfaCode\LetMigrate\MigrationRecord;
 
 /**
  * Persists the list of applied migrations so the runner can distinguish
  * pending from completed migrations across runs.
+ *
+ * ╔══════════════════════════════════════════════════════════════╗
+ * ║  INTERNAL CONTRACT — SERVICE BOUNDARY                       ║
+ * ║                                                             ║
+ * ║  Only MigrationService (via MigrationServiceFactory) may   ║
+ * ║  hold a reference to this interface.  All other code must   ║
+ * ║  depend on MigrationServiceInterface.                       ║
+ * ╚══════════════════════════════════════════════════════════════╝
  */
 interface MigrationRepositoryInterface
 {
@@ -25,21 +33,21 @@ interface MigrationRepositoryInterface
     public function lastBatch(): int;
 
     /**
-     * Return all records that belong to the last batch (for rollback).
+     * Return all records belonging to the last batch (for rollback).
      *
      * @return MigrationRecord[]
      */
     public function lastBatchRecords(): array;
 
     /**
-     * Return all applied migration filenames.
+     * Return all applied migration filenames in ascending order.
      *
      * @return string[]
      */
     public function appliedFilenames(): array;
 
     /**
-     * Persist a newly applied migration.
+     * Persist a newly applied migration in the given batch.
      */
     public function log(string $filename, int $batch): void;
 
@@ -50,12 +58,12 @@ interface MigrationRepositoryInterface
 
     /**
      * Create the tracking table if it does not yet exist.
-     * Called automatically on first run.
+     * Idempotent — safe to call on every run.
      */
     public function ensureTable(): void;
 
     /**
-     * Return true when the repository table already exists.
+     * Return true when the tracking table already exists in the database.
      */
     public function repositoryExists(): bool;
 }

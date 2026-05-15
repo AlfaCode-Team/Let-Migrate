@@ -6,12 +6,13 @@ namespace AlfaCode\LetMigrate;
 
 use AlfaCode\LetMigrate\Contract\MigrationRepositoryInterface;
 use AlfaCode\LetMigrate\Contract\MigrationResolverInterface;
+use AlfaCode\LetMigrate\Contract\MigrationRunnerInterface;
 use AlfaCode\LetMigrate\Contract\SchemaBuilderInterface;
 use AlfaCode\LetMigrate\Event\MigrationEventDispatcher;
 use AlfaCode\LetMigrate\Event\MigrationFailed;
 use AlfaCode\LetMigrate\Event\MigrationFinished;
-use AlfaCode\LetMigrate\Event\MigrationStarted;
 use AlfaCode\LetMigrate\Event\MigrationsCompleted;
+use AlfaCode\LetMigrate\Event\MigrationStarted;
 use AlfaCode\LetMigrate\Exception\MigrationException;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -19,44 +20,36 @@ use Psr\Log\NullLogger;
 /**
  * Orchestrates the full migration lifecycle.
  *
+ * ╔══════════════════════════════════════════════════════════════╗
+ * ║  INTERNAL COMPONENT                                         ║
+ * ║                                                             ║
+ * ║  MigrationRunner is an internal orchestrator used ONLY by   ║
+ * ║  MigrationService.  Application code must depend on         ║
+ * ║  MigrationServiceInterface — not on this class directly.    ║
+ * ╚══════════════════════════════════════════════════════════════╝
+ *
  * Responsibilities
  * ────────────────
  * 1. Ensure the tracking table exists (idempotent).
  * 2. Resolve all migration files from configured paths.
  * 3. Diff against the repository to find pending migrations.
  * 4. Run each pending migration inside its own transaction.
- * 5. Record each applied migration with a monotonically increasing batch number.
+ * 5. Record each applied migration with a monotonically-increasing batch number.
  * 6. Emit lifecycle events (started / finished / failed / completed).
- *
- * Rollback reverses the last N batches in reverse filename order, wrapping
- * each rollback in its own transaction so a partial failure is recoverable.
- *
- * Usage:
- *
- *   $runner = new MigrationRunner($repository, $resolver, $schema);
- *   $result = $runner->run();   // MigrationResult
- *   echo $result->summary();
- *
- *   $result = $runner->rollback(steps: 1);
  */
-final class MigrationRunner
+final class MigrationRunner implements MigrationRunnerInterface
 {
     public function __construct(
         private readonly MigrationRepositoryInterface $repository,
         private readonly MigrationResolverInterface   $resolver,
         private readonly SchemaBuilderInterface       $schema,
-        private readonly MigrationEventDispatcher     $events  = new MigrationEventDispatcher(),
-        private readonly LoggerInterface              $logger  = new NullLogger(),
+        private readonly MigrationEventDispatcher     $events = new MigrationEventDispatcher(),
+        private readonly LoggerInterface              $logger = new NullLogger(),
         private readonly bool                         $pretend = false,
     ) {}
 
     // ── Run ───────────────────────────────────────────────────────
 
-    /**
-     * Apply all pending migrations.
-     *
-     * @throws MigrationException
-     */
     public function run(): MigrationResult
     {
         $this->repository->ensureTable();
@@ -69,9 +62,8 @@ final class MigrationRunner
             return MigrationResult::empty();
         }
 
-        $batch   = $this->repository->lastBatch() + 1;
+        $batch = $this->repository->lastBatch() + 1;
         $applied = [];
-        $failed  = null;
 
         foreach ($pending as $filename => $migration) {
             $this->events->dispatch(new MigrationStarted($filename, 'up'));
@@ -88,6 +80,7 @@ final class MigrationRunner
                         $driver->commit();
                     } catch (\Throwable $e) {
                         $driver->rollback();
+
                         throw $e;
                     }
                 } else {
@@ -99,7 +92,6 @@ final class MigrationRunner
                 $this->logger->info("[LetMigrate] Migrated:  {$filename}");
 
             } catch (\Throwable $e) {
-                $failed = $e;
                 $this->events->dispatch(new MigrationFailed($filename, 'up', $e));
                 $this->logger->error("[LetMigrate] Failed:    {$filename} — {$e->getMessage()}");
 
@@ -113,18 +105,15 @@ final class MigrationRunner
 
         $result = new MigrationResult(applied: $applied, rolledBack: [], batch: $batch);
         $this->events->dispatch(new MigrationsCompleted($result));
-        $this->logger->info(sprintf('[LetMigrate] %d migration(s) applied in batch %d.', count($applied), $batch));
+        $this->logger->info(
+            sprintf('[LetMigrate] %d migration(s) applied in batch %d.', count($applied), $batch),
+        );
 
         return $result;
     }
 
     // ── Rollback ──────────────────────────────────────────────────
 
-    /**
-     * Reverse the last N batches.
-     *
-     * @throws MigrationException
-     */
     public function rollback(int $steps = 1): MigrationResult
     {
         $this->repository->ensureTable();
@@ -137,8 +126,8 @@ final class MigrationRunner
             return MigrationResult::empty();
         }
 
-        $all          = $this->resolver->resolve();
-        $rolledBack   = [];
+        $all = $this->resolver->resolve();
+        $rolledBack = [];
 
         foreach ($toRollback as $filename) {
             if (!isset($all[$filename])) {
@@ -162,6 +151,7 @@ final class MigrationRunner
                         $driver->commit();
                     } catch (\Throwable $e) {
                         $driver->rollback();
+
                         throw $e;
                     }
                 } else {
@@ -186,30 +176,26 @@ final class MigrationRunner
 
         $result = new MigrationResult(applied: [], rolledBack: $rolledBack, batch: 0);
         $this->events->dispatch(new MigrationsCompleted($result));
-        $this->logger->info(sprintf('[LetMigrate] %d migration(s) rolled back.', count($rolledBack)));
+        $this->logger->info(
+            sprintf('[LetMigrate] %d migration(s) rolled back.', count($rolledBack)),
+        );
 
         return $result;
     }
 
     // ── Reset ─────────────────────────────────────────────────────
 
-    /**
-     * Roll back ALL applied migrations (in reverse order).
-     */
     public function reset(): MigrationResult
     {
         $this->repository->ensureTable();
         $applied = array_reverse($this->repository->appliedFilenames());
-        $steps   = count($applied);
+        $steps = count($applied);
 
         return $steps > 0 ? $this->rollback($steps) : MigrationResult::empty();
     }
 
     // ── Refresh ───────────────────────────────────────────────────
 
-    /**
-     * Reset then re-run all migrations (destructive — use in dev only).
-     */
     public function refresh(): MigrationResult
     {
         $this->reset();
@@ -219,16 +205,11 @@ final class MigrationRunner
 
     // ── Status ────────────────────────────────────────────────────
 
-    /**
-     * Return a status map of all discovered migrations.
-     *
-     * @return array<string, array{status: string, batch: int|null}>
-     */
     public function status(): array
     {
         $this->repository->ensureTable();
 
-        $all     = $this->resolver->resolve();
+        $all = $this->resolver->resolve();
         $records = [];
 
         foreach ($this->repository->all() as $record) {
@@ -241,12 +222,12 @@ final class MigrationRunner
             if (isset($records[$filename])) {
                 $status[$filename] = [
                     'status' => 'applied',
-                    'batch'  => $records[$filename]->batch,
+                    'batch' => $records[$filename]->batch,
                 ];
             } else {
                 $status[$filename] = [
                     'status' => 'pending',
-                    'batch'  => null,
+                    'batch' => null,
                 ];
             }
         }
@@ -254,20 +235,28 @@ final class MigrationRunner
         return $status;
     }
 
-    // ── Helpers ───────────────────────────────────────────────────
+    // ── Pending ───────────────────────────────────────────────────
 
-    /**
-     * Return all pending (not yet applied) migrations, sorted by filename.
-     *
-     * @return array<string, \AlfaCode\LetMigrate\Contract\MigrationInterface>
-     */
     public function pending(): array
     {
-        $all     = $this->resolver->resolve();
+        $all = $this->resolver->resolve();
         $applied = array_flip($this->repository->appliedFilenames());
 
-        return array_filter($all, static fn($_, $filename) => !isset($applied[$filename]), ARRAY_FILTER_USE_BOTH);
+        return array_filter(
+            $all,
+            static fn($_, string $filename) => !isset($applied[$filename]),
+            ARRAY_FILTER_USE_BOTH,
+        );
     }
+
+    // ── Event bus accessor (used by MigrationService) ─────────────
+
+    public function getEvents(): MigrationEventDispatcher
+    {
+        return $this->events;
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────
 
     /**
      * Return the last N applied migration filenames in rollback order (newest first).
@@ -276,32 +265,34 @@ final class MigrationRunner
      */
     private function lastApplied(int $steps): array
     {
-        $all     = array_reverse($this->repository->appliedFilenames());
+        $all = array_reverse($this->repository->appliedFilenames());
         $batches = [];
 
         foreach ($this->repository->all() as $record) {
             $batches[$record->migration] = $record->batch;
         }
 
-        // Group into batches and take $steps batches from the end
         $grouped = [];
+
         foreach ($all as $filename) {
-            $batch             = $batches[$filename] ?? 0;
+            $batch = $batches[$filename] ?? 0;
             $grouped[$batch][] = $filename;
         }
 
         krsort($grouped);
 
         $selected = [];
-        $count    = 0;
+        $count = 0;
 
         foreach ($grouped as $batchFiles) {
             if ($count >= $steps) {
                 break;
             }
+
             foreach ($batchFiles as $f) {
                 $selected[] = $f;
             }
+
             $count++;
         }
 

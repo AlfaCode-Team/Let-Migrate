@@ -16,32 +16,9 @@ use AlfaCode\LetMigrate\Exception\QueryException;
  */
 abstract class AbstractPdoDriver implements DatabaseDriverInterface
 {
-    private ?\PDO $pdo = null;
+    private \PDO|null $pdo = null;
 
     private bool $inTransaction = false;
-
-    /**
-     * Build and return the PDO connection.
-     * Called lazily on first use.
-     */
-    abstract protected function createConnection(): \PDO;
-
-    // ── Connection ────────────────────────────────────────────────
-
-    protected function pdo(): \PDO
-    {
-        if ($this->pdo === null) {
-            try {
-                $this->pdo = $this->createConnection();
-                $this->pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
-                $this->pdo->setAttribute(\PDO::ATTR_DEFAULT_FETCH_MODE, \PDO::FETCH_ASSOC);
-            } catch (\PDOException $e) {
-                throw new ConnectionException($e->getMessage(), (int) $e->getCode(), $e);
-            }
-        }
-
-        return $this->pdo;
-    }
 
     // ── DatabaseDriverInterface ───────────────────────────────────
 
@@ -57,7 +34,7 @@ abstract class AbstractPdoDriver implements DatabaseDriverInterface
         }
     }
 
-    public function fetchOne(string $sql, array $bindings = []): ?array
+    public function fetchOne(string $sql, array $bindings = []): array|null
     {
         try {
             $stmt = $this->pdo()->prepare($sql);
@@ -84,9 +61,9 @@ abstract class AbstractPdoDriver implements DatabaseDriverInterface
 
     public function insert(string $table, array $data): int
     {
-        $cols        = implode(', ', array_map([$this, 'quoteIdentifier'], array_keys($data)));
+        $cols = implode(', ', array_map([$this, 'quoteIdentifier'], array_keys($data)));
         $placeholders = implode(', ', array_fill(0, count($data), '?'));
-        $sql         = "INSERT INTO {$this->quoteIdentifier($table)} ({$cols}) VALUES ({$placeholders})";
+        $sql = "INSERT INTO {$this->quoteIdentifier($table)} ({$cols}) VALUES ({$placeholders})";
 
         $this->execute($sql, array_values($data));
 
@@ -95,9 +72,9 @@ abstract class AbstractPdoDriver implements DatabaseDriverInterface
 
     public function update(string $table, array $data, array $where): int
     {
-        $set   = implode(', ', array_map(fn($k) => "{$this->quoteIdentifier($k)} = ?", array_keys($data)));
-        $cond  = implode(' AND ', array_map(fn($k) => "{$this->quoteIdentifier($k)} = ?", array_keys($where)));
-        $sql   = "UPDATE {$this->quoteIdentifier($table)} SET {$set} WHERE {$cond}";
+        $set = implode(', ', array_map(fn($k) => "{$this->quoteIdentifier($k)} = ?", array_keys($data)));
+        $cond = implode(' AND ', array_map(fn($k) => "{$this->quoteIdentifier($k)} = ?", array_keys($where)));
+        $sql = "UPDATE {$this->quoteIdentifier($table)} SET {$set} WHERE {$cond}";
 
         return $this->execute($sql, [...array_values($data), ...array_values($where)]);
     }
@@ -105,7 +82,7 @@ abstract class AbstractPdoDriver implements DatabaseDriverInterface
     public function delete(string $table, array $where): int
     {
         $cond = implode(' AND ', array_map(fn($k) => "{$this->quoteIdentifier($k)} = ?", array_keys($where)));
-        $sql  = "DELETE FROM {$this->quoteIdentifier($table)} WHERE {$cond}";
+        $sql = "DELETE FROM {$this->quoteIdentifier($table)} WHERE {$cond}";
 
         return $this->execute($sql, array_values($where));
     }
@@ -133,5 +110,28 @@ abstract class AbstractPdoDriver implements DatabaseDriverInterface
     public function inTransaction(): bool
     {
         return $this->inTransaction;
+    }
+
+    /**
+     * Build and return the PDO connection.
+     * Called lazily on first use.
+     */
+    abstract protected function createConnection(): \PDO;
+
+    // ── Connection ────────────────────────────────────────────────
+
+    protected function pdo(): \PDO
+    {
+        if ($this->pdo === null) {
+            try {
+                $this->pdo = $this->createConnection();
+                $this->pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+                $this->pdo->setAttribute(\PDO::ATTR_DEFAULT_FETCH_MODE, \PDO::FETCH_ASSOC);
+            } catch (\PDOException $e) {
+                throw new ConnectionException($e->getMessage(), (int) $e->getCode(), $e);
+            }
+        }
+
+        return $this->pdo;
     }
 }

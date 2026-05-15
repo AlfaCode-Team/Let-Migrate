@@ -7,8 +7,8 @@ namespace AlfaCode\LetMigrate\Tests\Unit;
 use AlfaCode\LetMigrate\Event\MigrationEventDispatcher;
 use AlfaCode\LetMigrate\Event\MigrationFailed;
 use AlfaCode\LetMigrate\Event\MigrationFinished;
-use AlfaCode\LetMigrate\Event\MigrationStarted;
 use AlfaCode\LetMigrate\Event\MigrationsCompleted;
+use AlfaCode\LetMigrate\Event\MigrationStarted;
 use AlfaCode\LetMigrate\MigrationResult;
 use PHPUnit\Framework\TestCase;
 
@@ -50,9 +50,15 @@ final class MigrationEventDispatcherTest extends TestCase
     public function test_multiple_listeners_all_fire(): void
     {
         $log = [];
-        $this->bus->on(MigrationStarted::class, static function () use (&$log): void { $log[] = 'A'; });
-        $this->bus->on(MigrationStarted::class, static function () use (&$log): void { $log[] = 'B'; });
-        $this->bus->on(MigrationStarted::class, static function () use (&$log): void { $log[] = 'C'; });
+        $this->bus->on(MigrationStarted::class, static function () use (&$log): void {
+            $log[] = 'A';
+        });
+        $this->bus->on(MigrationStarted::class, static function () use (&$log): void {
+            $log[] = 'B';
+        });
+        $this->bus->on(MigrationStarted::class, static function () use (&$log): void {
+            $log[] = 'C';
+        });
 
         $this->bus->dispatch(new MigrationStarted('mig', 'up'));
 
@@ -71,7 +77,9 @@ final class MigrationEventDispatcherTest extends TestCase
     public function test_once_listener_fires_only_once(): void
     {
         $count = 0;
-        $this->bus->once(MigrationStarted::class, static function () use (&$count): void { $count++; });
+        $this->bus->once(MigrationStarted::class, static function () use (&$count): void {
+            $count++;
+        });
 
         $event = new MigrationStarted('mig', 'up');
         $this->bus->dispatch($event);
@@ -86,7 +94,9 @@ final class MigrationEventDispatcherTest extends TestCase
     public function test_off_with_listener_removes_specific_listener(): void
     {
         $count = 0;
-        $listener = static function () use (&$count): void { $count++; };
+        $listener = static function () use (&$count): void {
+            $count++;
+        };
 
         $this->bus->on(MigrationStarted::class, $listener);
         $this->bus->off(MigrationStarted::class, $listener);
@@ -98,8 +108,12 @@ final class MigrationEventDispatcherTest extends TestCase
     public function test_off_without_listener_removes_all_listeners(): void
     {
         $count = 0;
-        $this->bus->on(MigrationStarted::class, static function () use (&$count): void { $count++; });
-        $this->bus->on(MigrationStarted::class, static function () use (&$count): void { $count++; });
+        $this->bus->on(MigrationStarted::class, static function () use (&$count): void {
+            $count++;
+        });
+        $this->bus->on(MigrationStarted::class, static function () use (&$count): void {
+            $count++;
+        });
 
         $this->bus->off(MigrationStarted::class);
         $this->bus->dispatch(new MigrationStarted('mig', 'up'));
@@ -190,7 +204,7 @@ final class MigrationEventDispatcherTest extends TestCase
             $this->assertMatchesRegularExpression(
                 '/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/',
                 $event->occurredAt,
-                get_class($event) . '::occurredAt must be a valid datetime string',
+                $event::class . '::occurredAt must be a valid datetime string',
             );
         }
     }

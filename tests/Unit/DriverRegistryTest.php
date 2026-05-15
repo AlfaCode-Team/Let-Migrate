@@ -9,8 +9,8 @@ use AlfaCode\LetMigrate\Driver\PostgreSQL\PostgreSQLGrammar;
 use AlfaCode\LetMigrate\Driver\SQLite\SQLiteDriver;
 use AlfaCode\LetMigrate\Driver\SQLite\SQLiteGrammar;
 use AlfaCode\LetMigrate\Driver\SQLServer\SQLServerGrammar;
+use AlfaCode\LetMigrate\DriverRegistry;
 use AlfaCode\LetMigrate\Exception\LetMigrateException;
-use AlfaCode\LetMigrate\Registry\DriverRegistry;
 use AlfaCode\LetMigrate\Schema\SchemaBuilder;
 use PHPUnit\Framework\TestCase;
 
@@ -21,9 +21,9 @@ final class DriverRegistryTest extends TestCase
     public function test_from_config_resolves_sqlite_driver(): void
     {
         $registry = DriverRegistry::fromConfig([
-            'driver'   => 'sqlite',
+            'driver' => 'sqlite',
             'database' => ':memory:',
-            'paths'    => [sys_get_temp_dir()],
+            'paths' => [sys_get_temp_dir()],
         ]);
 
         $this->assertSame('sqlite', $registry->driver()->getName());
@@ -31,15 +31,13 @@ final class DriverRegistryTest extends TestCase
 
     public function test_from_config_resolves_mysql_grammar(): void
     {
-        // We cannot connect to a real MySQL in unit tests, but grammar resolution
-        // (which is stateless) is safe to assert.
         $registry = DriverRegistry::fromConfig([
-            'driver'   => 'mysql',
-            'host'     => '127.0.0.1',
+            'driver' => 'mysql',
+            'host' => '127.0.0.1',
             'database' => 'test',
             'username' => 'root',
             'password' => '',
-            'paths'    => [],
+            'paths' => [],
         ]);
 
         $this->assertInstanceOf(MySQLGrammar::class, $registry->grammar());
@@ -48,12 +46,12 @@ final class DriverRegistryTest extends TestCase
     public function test_from_config_resolves_postgresql_grammar(): void
     {
         $registry = DriverRegistry::fromConfig([
-            'driver'   => 'pgsql',
-            'host'     => '127.0.0.1',
+            'driver' => 'pgsql',
+            'host' => '127.0.0.1',
             'database' => 'test',
             'username' => 'postgres',
             'password' => '',
-            'paths'    => [],
+            'paths' => [],
         ]);
 
         $this->assertInstanceOf(PostgreSQLGrammar::class, $registry->grammar());
@@ -62,12 +60,12 @@ final class DriverRegistryTest extends TestCase
     public function test_from_config_resolves_sqlserver_grammar(): void
     {
         $registry = DriverRegistry::fromConfig([
-            'driver'   => 'sqlsrv',
-            'host'     => '127.0.0.1',
+            'driver' => 'sqlsrv',
+            'host' => '127.0.0.1',
             'database' => 'test',
             'username' => 'sa',
             'password' => '',
-            'paths'    => [],
+            'paths' => [],
         ]);
 
         $this->assertInstanceOf(SQLServerGrammar::class, $registry->grammar());
@@ -79,15 +77,18 @@ final class DriverRegistryTest extends TestCase
 
         foreach ($aliases as $alias) {
             $registry = DriverRegistry::fromConfig([
-                'driver'   => $alias,
-                'host'     => '127.0.0.1',
+                'driver' => $alias,
+                'host' => '127.0.0.1',
                 'database' => 'test',
                 'username' => 'root',
                 'password' => '',
-                'paths'    => [],
+                'paths' => [],
             ]);
 
-            $this->assertNotNull($registry->grammar(), "Grammar must resolve for alias '{$alias}'");
+            $this->assertNotNull(
+                $registry->grammar(),
+                "Grammar must resolve for alias '{$alias}'",
+            );
         }
     }
 
@@ -97,29 +98,29 @@ final class DriverRegistryTest extends TestCase
         $this->expectExceptionMessageMatches('/Unsupported driver/i');
 
         DriverRegistry::fromConfig([
-            'driver'   => 'oracle',
+            'driver' => 'oracle',
             'database' => 'test',
-            'paths'    => [],
+            'paths' => [],
         ]);
     }
 
     public function test_missing_driver_key_throws_exception(): void
     {
         $this->expectException(LetMigrateException::class);
-        $this->expectExceptionMessageMatches("/driver.*required/i");
+        $this->expectExceptionMessageMatches('/driver.*required/i');
 
         DriverRegistry::fromConfig(['database' => 'test', 'paths' => []]);
     }
 
     // ── fromDriverAndGrammar ──────────────────────────────────────
 
-    public function test_from_driver_and_grammar_builds_correctly(): void
+    public function test_from_driver_and_grammar_returns_same_instances(): void
     {
-        $driver   = new SQLiteDriver(':memory:');
-        $grammar  = new SQLiteGrammar();
+        $driver = new SQLiteDriver(':memory:');
+        $grammar = new SQLiteGrammar();
         $registry = DriverRegistry::fromDriverAndGrammar($driver, $grammar);
 
-        $this->assertSame($driver,  $registry->driver());
+        $this->assertSame($driver, $registry->driver());
         $this->assertSame($grammar, $registry->grammar());
     }
 
@@ -151,12 +152,12 @@ final class DriverRegistryTest extends TestCase
     {
         $customDriver = new SQLiteDriver(':memory:');
 
-        DriverRegistry::extendDriver('mydb', static fn($cfg) => $customDriver);
+        DriverRegistry::extendDriver('mydb_ext', static fn($cfg) => $customDriver);
 
         $registry = DriverRegistry::fromConfig([
-            'driver'   => 'mydb',
+            'driver' => 'mydb_ext',
             'database' => ':memory:',
-            'paths'    => [],
+            'paths' => [],
         ]);
 
         $this->assertSame($customDriver, $registry->driver());
@@ -166,12 +167,12 @@ final class DriverRegistryTest extends TestCase
     {
         $customGrammar = new SQLiteGrammar();
 
-        DriverRegistry::extendGrammar('mydb2', static fn($cfg) => $customGrammar);
+        DriverRegistry::extendGrammar('mydb_ext2', static fn($cfg) => $customGrammar);
 
         $registry = DriverRegistry::fromConfig([
-            'driver'   => 'mydb2',
+            'driver' => 'mydb_ext',
             'database' => ':memory:',
-            'paths'    => [],
+            'paths' => [],
         ]);
 
         $this->assertSame($customGrammar, $registry->grammar());
@@ -179,12 +180,16 @@ final class DriverRegistryTest extends TestCase
 
     // ── supportedDrivers ─────────────────────────────────────────
 
-    public function test_supported_drivers_includes_core_names(): void
+    public function test_supported_drivers_includes_all_core_names(): void
     {
         $supported = DriverRegistry::supportedDrivers();
 
         foreach (['mysql', 'pgsql', 'sqlite', 'sqlsrv'] as $driver) {
-            $this->assertContains($driver, $supported, "'{$driver}' should be in supported drivers list");
+            $this->assertContains(
+                $driver,
+                $supported,
+                "'{$driver}' must be in supported drivers list",
+            );
         }
     }
 }

@@ -17,40 +17,40 @@ final class MySQLDriver extends AbstractPdoDriver
         private readonly string $database,
         private readonly string $username,
         private readonly string $password,
-        private readonly string $charset  = 'utf8mb4',
-        private readonly array  $options  = [],
+        private readonly string $charset = 'utf8mb4',
+        private readonly array  $options = [],
     ) {}
 
     public static function fromDsn(string $dsn, string $username, string $password, array $options = []): self
     {
         // Parse DSN: mysql:host=localhost;port=3306;dbname=mydb;charset=utf8mb4
-        $parts    = [];
-        $segments = explode(';', ltrim($dsn, 'mysql:'));
+        $parts = [];
+        $segments = explode(';', mb_ltrim($dsn, 'mysql:'));
         foreach ($segments as $seg) {
-            [$k, $v]  = explode('=', $seg, 2) + ['', ''];
+            [$k, $v] = explode('=', $seg, 2) + ['', ''];
             $parts[$k] = $v;
         }
 
         return new self(
-            host:     $parts['host']    ?? '127.0.0.1',
-            port:     (int)($parts['port']    ?? 3306),
-            database: $parts['dbname']  ?? '',
+            host: $parts['host'] ?? '127.0.0.1',
+            port: (int) ($parts['port'] ?? 3306),
+            database: $parts['dbname'] ?? '',
             username: $username,
             password: $password,
-            charset:  $parts['charset'] ?? 'utf8mb4',
-            options:  $options,
+            charset: $parts['charset'] ?? 'utf8mb4',
+            options: $options,
         );
     }
 
-    protected function createConnection(): \PDO
+    public function getName(): string
     {
-        $dsn = "mysql:host={$this->host};port={$this->port};dbname={$this->database};charset={$this->charset}";
-
-        return new \PDO($dsn, $this->username, $this->password, $this->options);
+        return 'mysql';
     }
 
-    public function getName(): string        { return 'mysql'; }
-    public function getPlatformName(): string { return 'mysql'; }
+    public function getPlatformName(): string
+    {
+        return 'mysql';
+    }
 
     public function quoteIdentifier(string $identifier): string
     {
@@ -92,5 +92,12 @@ final class MySQLDriver extends AbstractPdoDriver
         $rows = $this->fetchAll('SHOW TABLES');
 
         return array_map(static fn($row) => current($row), $rows);
+    }
+
+    protected function createConnection(): \PDO
+    {
+        $dsn = "mysql:host={$this->host};port={$this->port};dbname={$this->database};charset={$this->charset}";
+
+        return new \PDO($dsn, $this->username, $this->password, $this->options);
     }
 }

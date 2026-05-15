@@ -13,18 +13,11 @@ use AlfaCode\LetMigrate\Exception\MigrationException;
  *
  * Conventions
  * ───────────
- * • Filenames must be PHP files matching the pattern:
- *     YYYY_MM_DD_NNNNNN_description.php
- *   e.g. 2024_01_15_000001_create_users_table.php
- *
- * • Each file must return a class that implements MigrationInterface,
- *   OR contain a class whose name matches the studly-cased filename.
- *
- * • Files are sorted lexicographically — the timestamp prefix ensures
- *   correct execution order.
- *
- * • Multiple paths are supported. Files from all paths are merged and
- *   sorted together before resolving.
+ * • Filenames must match:  YYYY_MM_DD_NNNNNN_description.php
+ * • Each file must return an object implementing MigrationInterface, or
+ *   declare a class whose name maps to the studly-cased filename.
+ * • Files are sorted lexicographically so the timestamp prefix enforces order.
+ * • Multiple paths are supported and merged before sorting.
  */
 final class FilesystemMigrationResolver implements MigrationResolverInterface
 {
@@ -44,7 +37,9 @@ final class FilesystemMigrationResolver implements MigrationResolverInterface
         $real = realpath($path);
 
         if ($real === false || !is_dir($real)) {
-            throw new MigrationException("Migration path does not exist or is not a directory: {$path}");
+            throw new MigrationException(
+                "Migration path does not exist or is not a directory: {$path}",
+            );
         }
 
         if (!in_array($real, $this->paths, true)) {
@@ -60,13 +55,12 @@ final class FilesystemMigrationResolver implements MigrationResolverInterface
     public function resolve(): array
     {
         $files = $this->discoverFiles();
-        ksort($files); // lexicographic sort by filename key
+        ksort($files);
 
         $migrations = [];
 
         foreach ($files as $filename => $filePath) {
-            $instance = $this->loadFile($filePath);
-            $migrations[$filename] = $instance;
+            $migrations[$filename] = $this->loadFile($filePath);
         }
 
         return $migrations;
@@ -75,8 +69,6 @@ final class FilesystemMigrationResolver implements MigrationResolverInterface
     // ── Private helpers ───────────────────────────────────────────
 
     /**
-     * Collect all migration files from all registered paths.
-     *
      * @return array<string, string> filename (no ext) => absolute file path
      */
     private function discoverFiles(): array
@@ -111,48 +103,42 @@ final class FilesystemMigrationResolver implements MigrationResolverInterface
         return $files;
     }
 
-    /**
-     * A valid migration filename starts with YYYY_MM_DD_ or a numeric prefix.
-     */
     private function looksLikeMigration(string $filename): bool
     {
         return (bool) preg_match('/^\d{4}_\d{2}_\d{2}_\d+_.+$/', $filename)
             || (bool) preg_match('/^\d+_.+$/', $filename);
     }
 
-    /**
-     * Require the file and resolve the MigrationInterface instance from it.
-     *
-     * The file may:
-     *   1. return a new instance directly (return new MyMigration();)
-     *   2. declare a class — we instantiate it by guessing the class name
-     */
     private function loadFile(string $filePath): MigrationInterface
     {
-        // Snapshot classes before include to detect newly defined class.
-        // Use require (not require_once) so multiple resolver instances can each
-        // get a fresh return value from the same file in the same process.
         $before = get_declared_classes();
         $result = require $filePath;
-        $after  = get_declared_classes();
+        $after = get_declared_classes();
 
-        // If the file returned an instance directly, use it
         if ($result instanceof MigrationInterface) {
             return $result;
         }
 
-        // Otherwise find the new class declared by this file
+        if ($result !== null && !is_object($result)) {
+            throw new MigrationException(
+                "Migration file '{$filePath}' must return an object implementing MigrationInterface or null."
+            );
+        }
+
         $newClasses = array_values(array_diff($after, $before));
 
         foreach (array_reverse($newClasses) as $class) {
             $ref = new \ReflectionClass($class);
+
             if ($ref->isInstantiable() && $ref->implementsInterface(MigrationInterface::class)) {
-                return $ref->newInstance();
+                /** @var MigrationInterface $obj */
+                $obj = $ref->newInstance();
+                return $obj;
             }
         }
 
         throw new MigrationException(
-            "Migration file '{$filePath}' did not define a class implementing MigrationInterface.",
+            "Migration file '{$filePath}' did not define a class implementing MigrationInterface."
         );
     }
 }

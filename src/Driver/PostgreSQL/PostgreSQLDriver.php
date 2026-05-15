@@ -17,22 +17,19 @@ final class PostgreSQLDriver extends AbstractPdoDriver
         private readonly string $database,
         private readonly string $username,
         private readonly string $password,
-        private readonly string $schema  = 'public',
+        private readonly string $schema = 'public',
         private readonly array  $options = [],
     ) {}
 
-    protected function createConnection(): \PDO
+    public function getName(): string
     {
-        $dsn = "pgsql:host={$this->host};port={$this->port};dbname={$this->database}";
-        $pdo = new \PDO($dsn, $this->username, $this->password, $this->options);
-        // Set search_path to the configured schema
-        $pdo->exec("SET search_path TO \"{$this->schema}\"");
-
-        return $pdo;
+        return 'pgsql';
     }
 
-    public function getName(): string         { return 'pgsql'; }
-    public function getPlatformName(): string  { return 'pgsql'; }
+    public function getPlatformName(): string
+    {
+        return 'pgsql';
+    }
 
     public function quoteIdentifier(string $identifier): string
     {
@@ -42,7 +39,7 @@ final class PostgreSQLDriver extends AbstractPdoDriver
     public function tableExists(string $table): bool
     {
         $row = $this->fetchOne(
-            "SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = $1 LIMIT 1",
+            'SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = $1 LIMIT 1',
             [$table],
         );
 
@@ -52,7 +49,7 @@ final class PostgreSQLDriver extends AbstractPdoDriver
     public function columnExists(string $table, string $column): bool
     {
         $row = $this->fetchOne(
-            "SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2 LIMIT 1",
+            'SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2 LIMIT 1',
             [$table, $column],
         );
 
@@ -62,7 +59,7 @@ final class PostgreSQLDriver extends AbstractPdoDriver
     public function listColumns(string $table): array
     {
         $rows = $this->fetchAll(
-            "SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 ORDER BY ordinal_position",
+            'SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 ORDER BY ordinal_position',
             [$table],
         );
 
@@ -76,5 +73,15 @@ final class PostgreSQLDriver extends AbstractPdoDriver
         );
 
         return array_column($rows, 'table_name');
+    }
+
+    protected function createConnection(): \PDO
+    {
+        $dsn = "pgsql:host={$this->host};port={$this->port};dbname={$this->database}";
+        $pdo = new \PDO($dsn, $this->username, $this->password, $this->options);
+        // Set search_path to the configured schema
+        $pdo->exec("SET search_path TO \"{$this->schema}\"");
+
+        return $pdo;
     }
 }

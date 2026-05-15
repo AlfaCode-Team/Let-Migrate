@@ -11,14 +11,14 @@ use AlfaCode\LetMigrate\Schema\SchemaBuilder;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Exercises SchemaBuilder against a real SQLite in-memory database.
- *
- * These tests prove that Blueprint → Grammar → SQL → PDO actually works
- * end-to-end without needing MySQL, PostgreSQL, or SQL Server.
+ * Exercises SchemaBuilder against an in-memory SQLite database.
+ * All tests in this file prove that Blueprint → Grammar → SQL → PDO
+ * works end-to-end without needing MySQL, PostgreSQL, or SQL Server.
  */
 final class SchemaBuilderSQLiteTest extends TestCase
 {
     private SQLiteDriver  $driver;
+
     private SchemaBuilder $schema;
 
     protected function setUp(): void
@@ -50,10 +50,10 @@ final class SchemaBuilderSQLiteTest extends TestCase
         });
 
         $columns = $this->driver->listColumns('products');
-        $this->assertContains('id',         $columns);
-        $this->assertContains('name',       $columns);
-        $this->assertContains('price',      $columns);
-        $this->assertContains('is_active',  $columns);
+        $this->assertContains('id', $columns);
+        $this->assertContains('name', $columns);
+        $this->assertContains('price', $columns);
+        $this->assertContains('is_active', $columns);
         $this->assertContains('created_at', $columns);
         $this->assertContains('updated_at', $columns);
     }
@@ -66,9 +66,9 @@ final class SchemaBuilderSQLiteTest extends TestCase
         });
 
         $id = $this->driver->insert('tags', ['label' => 'php']);
-        $this->assertSame(1, $id);
-
         $row = $this->driver->fetchOne('SELECT * FROM "tags" WHERE "id" = ?', [1]);
+
+        $this->assertSame(1, $id);
         $this->assertSame('php', $row['label']);
     }
 
@@ -76,16 +76,18 @@ final class SchemaBuilderSQLiteTest extends TestCase
 
     public function test_drop_table_removes_table(): void
     {
-        $this->schema->create('tmp', static function (Blueprint $t): void { $t->id(); });
-        $this->assertTrue($this->driver->tableExists('tmp'));
-
+        $this->schema->create('tmp', static function (Blueprint $t): void {
+            $t->id();
+        });
         $this->schema->drop('tmp');
+
         $this->assertFalse($this->driver->tableExists('tmp'));
     }
 
     public function test_drop_if_exists_does_not_throw_when_table_absent(): void
     {
         $this->schema->dropIfExists('nonexistent_table');
+
         $this->assertTrue(true); // no exception = pass
     }
 
@@ -98,7 +100,10 @@ final class SchemaBuilderSQLiteTest extends TestCase
 
     public function test_has_table_returns_true_after_create(): void
     {
-        $this->schema->create('items', static function (Blueprint $t): void { $t->id(); });
+        $this->schema->create('items', static function (Blueprint $t): void {
+            $t->id();
+        });
+
         $this->assertTrue($this->schema->hasTable('items'));
     }
 
@@ -125,7 +130,9 @@ final class SchemaBuilderSQLiteTest extends TestCase
 
     public function test_rename_table_changes_table_name(): void
     {
-        $this->schema->create('old_name', static function (Blueprint $t): void { $t->id(); });
+        $this->schema->create('old_name', static function (Blueprint $t): void {
+            $t->id();
+        });
         $this->schema->rename('old_name', 'new_name');
 
         $this->assertFalse($this->driver->tableExists('old_name'));
@@ -154,6 +161,7 @@ final class SchemaBuilderSQLiteTest extends TestCase
     {
         $this->schema->disableForeignKeyChecks();
         $this->schema->enableForeignKeyChecks();
+
         $this->assertTrue(true);
     }
 
@@ -168,6 +176,7 @@ final class SchemaBuilderSQLiteTest extends TestCase
 
         $id = $this->driver->insert('profiles', ['bio' => null]);
         $row = $this->driver->fetchOne('SELECT "bio" FROM "profiles" WHERE "id" = ?', [$id]);
+
         $this->assertNull($row['bio']);
     }
 
@@ -180,11 +189,10 @@ final class SchemaBuilderSQLiteTest extends TestCase
             $t->boolean('enabled')->default(true);
         });
 
-        // Insert without specifying 'enabled' — the default should kick in
         $this->driver->execute('INSERT INTO "settings" ("id") VALUES (NULL)');
         $row = $this->driver->fetchOne('SELECT "enabled" FROM "settings" LIMIT 1');
 
-        $this->assertSame(1, (int) $row['enabled']); // SQLite stores TRUE as 1
+        $this->assertSame(1, (int) $row['enabled']);
     }
 
     // ── transaction rollback ──────────────────────────────────────
@@ -192,10 +200,11 @@ final class SchemaBuilderSQLiteTest extends TestCase
     public function test_rolled_back_transaction_reverts_table_creation(): void
     {
         $this->driver->beginTransaction();
-        $this->schema->create('temp_table', static function (Blueprint $t): void { $t->id(); });
+        $this->schema->create('temp_table', static function (Blueprint $t): void {
+            $t->id();
+        });
         $this->driver->rollback();
 
-        // SQLite DDL is transactional — table should be gone
         $this->assertFalse($this->driver->tableExists('temp_table'));
     }
 
@@ -210,8 +219,12 @@ final class SchemaBuilderSQLiteTest extends TestCase
 
     public function test_list_tables_returns_created_tables(): void
     {
-        $this->schema->create('foo', static function (Blueprint $t): void { $t->id(); });
-        $this->schema->create('bar', static function (Blueprint $t): void { $t->id(); });
+        $this->schema->create('foo', static function (Blueprint $t): void {
+            $t->id();
+        });
+        $this->schema->create('bar', static function (Blueprint $t): void {
+            $t->id();
+        });
 
         $tables = $this->driver->listTables();
         $this->assertContains('foo', $tables);
@@ -228,9 +241,9 @@ final class SchemaBuilderSQLiteTest extends TestCase
         });
 
         $columns = $this->driver->listColumns('invoices');
-        $this->assertContains('id',        $columns);
-        $this->assertContains('number',    $columns);
-        $this->assertContains('total',     $columns);
+        $this->assertContains('id', $columns);
+        $this->assertContains('number', $columns);
+        $this->assertContains('total', $columns);
         $this->assertContains('issued_at', $columns);
     }
 }

@@ -1,6 +1,6 @@
 {
   "name": "alfacode-team/let-migrate",
-  "description": "Enterprise-grade, multi-database PHP migration engine. Standalone module with its own namespace — works independently or alongside any PHP project.",
+  "description": "Enterprise-grade, multi-database PHP migration engine. Standalone module — works independently of any framework.",
   "type": "library",
   "license": "MIT",
   "keywords": [
@@ -27,7 +27,8 @@
   },
   "require-dev": {
     "phpunit/phpunit": "^10.5 || ^11.0",
-    "phpstan/phpstan": "^1.10"
+    "phpstan/phpstan": "^1.10",
+    "friendsofphp/php-cs-fixer": "^3.50"
   },
   "autoload": {
     "psr-4": {
@@ -36,7 +37,9 @@
   },
   "autoload-dev": {
     "psr-4": {
-      "AlfaCode\\LetMigrate\\Tests\\": "tests/"
+      "AlfaCode\\LetMigrate\\Tests\\": "tests/",
+      "App\\Commands\\Migrate\\": "src/Commands/Migrate/",
+      "App\\Tests\\": "tests/"
     }
   },
   "minimum-stability": "dev",
@@ -45,9 +48,34 @@
     "sort-packages": true
   },
   "scripts": {
-    "test":        "phpunit --no-coverage",
-    "test:unit":   "phpunit --testsuite Unit --no-coverage",
-    "test:int":    "phpunit --testsuite Integration --no-coverage",
-    "phpstan":     "phpstan analyse --memory-limit=256M"
+    "test":          "phpunit --no-coverage",
+    "test:unit":     "phpunit --testsuite Unit --no-coverage",
+    "test:int":      "phpunit --testsuite Integration --no-coverage",
+    "test:cmd:unit": "phpunit --testsuite Commands.Unit --no-coverage",
+    "test:cmd:int":  "phpunit --testsuite Commands.Integration --no-coverage",
+    "test:all":      "phpunit --testsuite All --no-coverage",
+    "test:cover":    "phpunit --coverage-html build/coverage/html --coverage-clover build/coverage/clover.xml",
+    "phpstan":       "phpstan analyse --memory-limit=256M",
+    "stan":          "@phpstan",
+    "cs-check":      "php-cs-fixer fix --dry-run --diff --config=.php-cs-fixer.php",
+    "cs-fix":        "php-cs-fixer fix --config=.php-cs-fixer.php",
+    "check": [
+      "@cs-check",
+      "@phpstan",
+      "@test:all"
+    ]
+  },
+  "scripts-descriptions": {
+    "test":          "Run core library tests (Unit + Integration)",
+    "test:unit":     "Run Unit tests only (no DB needed)",
+    "test:int":      "Run Integration tests (requires SQLite)",
+    "test:cmd:unit": "Run migration command unit tests",
+    "test:cmd:int":  "Run migration command integration tests (real SQLite)",
+    "test:all":      "Run every test including command tests",
+    "test:cover":    "Run tests + generate HTML coverage report",
+    "phpstan":       "PHPStan static analysis at level 8",
+    "cs-check":      "Check code style (dry-run)",
+    "cs-fix":        "Apply PHP CS Fixer rules",
+    "check":         "cs-check + phpstan + all tests (full CI gate)"
   }
 }

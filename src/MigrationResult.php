@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace AlfaCode\LetMigrate;
 
 /**
- * Immutable result returned by MigrationRunner after a run / rollback / refresh.
+ * Immutable result returned after run(), rollback(), reset(), or refresh().
  */
 final readonly class MigrationResult
 {
@@ -48,7 +48,11 @@ final readonly class MigrationResult
         $parts = [];
 
         if ($this->appliedCount() > 0) {
-            $parts[] = sprintf('%d migration(s) applied in batch %d.', $this->appliedCount(), $this->batch);
+            $parts[] = sprintf(
+                '%d migration(s) applied in batch %d.',
+                $this->appliedCount(),
+                $this->batch,
+            );
         }
 
         if ($this->rolledBackCount() > 0) {

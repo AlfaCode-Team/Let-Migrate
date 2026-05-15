@@ -6,14 +6,16 @@ namespace AlfaCode\LetMigrate\Contract;
 
 /**
  * Discovers and instantiates migration classes from the filesystem.
+ *
+ * The default implementation is Resolver\FilesystemMigrationResolver.
+ * Custom implementations allow migrations to be loaded from a database,
+ * a remote store, or an in-memory array (useful in tests).
  */
 interface MigrationResolverInterface
 {
     /**
-     * Return all migration instances found in the configured paths, keyed by
-     * their canonical filename (e.g. "2024_01_01_000001_create_users_table").
-     *
-     * Results are sorted in the order they should be applied (filename ascending).
+     * Return all discovered migration instances, keyed by their canonical filename
+     * (e.g. "2024_01_01_000001_create_users_table"), sorted ascending.
      *
      * @return array<string, MigrationInterface>
      */

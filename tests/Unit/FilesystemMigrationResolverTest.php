@@ -15,7 +15,7 @@ final class FilesystemMigrationResolverTest extends TestCase
     protected function setUp(): void
     {
         $this->dir = sys_get_temp_dir() . '/let_migrate_resolver_' . uniqid('', true);
-        mkdir($this->dir, 0777, true);
+        mkdir($this->dir, 0o777, true);
     }
 
     protected function tearDown(): void
@@ -26,32 +26,12 @@ final class FilesystemMigrationResolverTest extends TestCase
         rmdir($this->dir);
     }
 
-    // ── Helpers ───────────────────────────────────────────────────
-
-    private function write(string $filename, string $table = 'test_table'): void
-    {
-        $php = <<<PHP
-<?php
-use AlfaCode\LetMigrate\Contract\MigrationInterface;
-use AlfaCode\LetMigrate\Contract\SchemaBuilderInterface;
-use AlfaCode\LetMigrate\Schema\Blueprint;
-return new class implements MigrationInterface {
-    public function up(SchemaBuilderInterface \$schema): void {
-        \$schema->create('{$table}', static function (Blueprint \$t): void { \$t->id(); });
-    }
-    public function down(SchemaBuilderInterface \$schema): void {
-        \$schema->dropIfExists('{$table}');
-    }
-};
-PHP;
-        file_put_contents("{$this->dir}/{$filename}.php", $php);
-    }
-
-    // ── Tests ─────────────────────────────────────────────────────
+    // ── Resolve ───────────────────────────────────────────────────
 
     public function test_resolve_returns_empty_when_no_files(): void
     {
         $resolver = new FilesystemMigrationResolver([$this->dir]);
+
         $this->assertEmpty($resolver->resolve());
     }
 
@@ -74,7 +54,7 @@ PHP;
         $this->write('2024_01_01_000002_create_beta');
 
         $resolver = new FilesystemMigrationResolver([$this->dir]);
-        $keys     = array_keys($resolver->resolve());
+        $keys = array_keys($resolver->resolve());
 
         $this->assertSame([
             '2024_01_01_000001_create_alpha',
@@ -87,8 +67,8 @@ PHP;
     {
         $this->write('2024_01_01_000001_create_alpha');
 
-        $resolver  = new FilesystemMigrationResolver([$this->dir]);
-        $resolved  = $resolver->resolve();
+        $resolver = new FilesystemMigrationResolver([$this->dir]);
+        $resolved = $resolver->resolve();
         $migration = $resolved['2024_01_01_000001_create_alpha'];
 
         $this->assertInstanceOf(
@@ -96,6 +76,8 @@ PHP;
             $migration,
         );
     }
+
+    // ── Path management ───────────────────────────────────────────
 
     public function test_add_path_accepts_valid_directory(): void
     {
@@ -114,58 +96,67 @@ PHP;
         $resolver->addPath('/nonexistent/path/that/does/not/exist');
     }
 
+    public function test_same_path_added_twice_is_deduplicated(): void
+    {
+        $resolver = new FilesystemMigrationResolver();
+        $resolver->addPath($this->dir);
+        $resolver->addPath($this->dir);
+
+        $this->assertCount(1, $resolver->paths());
+    }
+
+    // ── File filtering ────────────────────────────────────────────
+
     public function test_skips_non_php_files(): void
     {
         file_put_contents("{$this->dir}/2024_01_01_000001_readme.txt", 'ignore me');
         $this->write('2024_01_01_000001_create_alpha');
 
         $resolver = new FilesystemMigrationResolver([$this->dir]);
-        $keys     = array_keys($resolver->resolve());
+        $keys = array_keys($resolver->resolve());
 
         $this->assertNotContains('2024_01_01_000001_readme', $keys);
         $this->assertContains('2024_01_01_000001_create_alpha', $keys);
     }
 
-    public function test_skips_files_that_do_not_match_naming_pattern(): void
+    public function test_skips_files_not_matching_naming_pattern(): void
     {
         file_put_contents("{$this->dir}/helpers.php", '<?php function foo() {}');
         $this->write('2024_01_01_000001_create_alpha');
 
         $resolver = new FilesystemMigrationResolver([$this->dir]);
-        $keys     = array_keys($resolver->resolve());
+        $keys = array_keys($resolver->resolve());
 
         $this->assertNotContains('helpers', $keys);
     }
 
+    // ── Multiple paths ────────────────────────────────────────────
+
     public function test_multiple_paths_are_merged(): void
     {
         $dir2 = sys_get_temp_dir() . '/let_migrate_resolver2_' . uniqid('', true);
-        mkdir($dir2, 0777, true);
+        mkdir($dir2, 0o777, true);
 
         try {
             $this->write('2024_01_01_000001_create_alpha');
-            $php = <<<'PHP'
-<?php
-use AlfaCode\LetMigrate\Contract\MigrationInterface;
-use AlfaCode\LetMigrate\Contract\SchemaBuilderInterface;
-use AlfaCode\LetMigrate\Schema\Blueprint;
-return new class implements MigrationInterface {
-    public function up(SchemaBuilderInterface $schema): void {
-        $schema->create('beta', static function (Blueprint $t): void { $t->id(); });
-    }
-    public function down(SchemaBuilderInterface $schema): void {
-        $schema->dropIfExists('beta');
-    }
-};
-PHP;
-            file_put_contents("{$dir2}/2024_01_01_000002_create_beta.php", $php);
+            file_put_contents("{$dir2}/2024_01_01_000002_create_beta.php", <<<'PHP'
+                <?php
+                use AlfaCode\LetMigrate\Contract\MigrationInterface;
+                use AlfaCode\LetMigrate\Contract\SchemaBuilderInterface;
+                use AlfaCode\LetMigrate\Schema\Blueprint;
+                return new class implements MigrationInterface {
+                    public function up(SchemaBuilderInterface $schema): void {
+                        $schema->create('beta', static function (Blueprint $t): void { $t->id(); });
+                    }
+                    public function down(SchemaBuilderInterface $schema): void { $schema->dropIfExists('beta'); }
+                };
+                PHP);
 
             $resolver = new FilesystemMigrationResolver([$this->dir, $dir2]);
             $resolved = $resolver->resolve();
 
             $this->assertArrayHasKey('2024_01_01_000001_create_alpha', $resolved);
             $this->assertArrayHasKey('2024_01_01_000002_create_beta', $resolved);
-
         } finally {
             foreach (glob($dir2 . '/*.php') ?: [] as $f) {
                 unlink($f);
@@ -174,38 +165,54 @@ PHP;
         }
     }
 
-    public function test_duplicate_filename_across_paths_throws_exception(): void
+    public function test_duplicate_filename_across_paths_throws(): void
     {
         $dir2 = sys_get_temp_dir() . '/let_migrate_dup_' . uniqid('', true);
-        mkdir($dir2, 0777, true);
+        mkdir($dir2, 0o777, true);
 
         try {
             $this->write('2024_01_01_000001_create_alpha');
-            $php = <<<'PHP'
-<?php
-use AlfaCode\LetMigrate\Contract\MigrationInterface;
-use AlfaCode\LetMigrate\Contract\SchemaBuilderInterface;
-use AlfaCode\LetMigrate\Schema\Blueprint;
-return new class implements MigrationInterface {
-    public function up(SchemaBuilderInterface $schema): void {
-        $schema->create('alpha2', static function (Blueprint $t): void { $t->id(); });
-    }
-    public function down(SchemaBuilderInterface $schema): void {}
-};
-PHP;
-            file_put_contents("{$dir2}/2024_01_01_000001_create_alpha.php", $php);
+            file_put_contents("{$dir2}/2024_01_01_000001_create_alpha.php", <<<'PHP'
+                <?php
+                use AlfaCode\LetMigrate\Contract\MigrationInterface;
+                use AlfaCode\LetMigrate\Contract\SchemaBuilderInterface;
+                return new class implements MigrationInterface {
+                    public function up(SchemaBuilderInterface $s): void {}
+                    public function down(SchemaBuilderInterface $s): void {}
+                };
+                PHP);
 
             $this->expectException(MigrationException::class);
             $this->expectExceptionMessageMatches('/[Dd]uplicate/');
 
             $resolver = new FilesystemMigrationResolver([$this->dir, $dir2]);
             $resolver->resolve();
-
         } finally {
             foreach (glob($dir2 . '/*.php') ?: [] as $f) {
                 unlink($f);
             }
             rmdir($dir2);
         }
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────
+
+    private function write(string $filename, string $table = 'test_table'): void
+    {
+        $php = <<<PHP
+            <?php
+            use AlfaCode\LetMigrate\Contract\MigrationInterface;
+            use AlfaCode\LetMigrate\Contract\SchemaBuilderInterface;
+            use AlfaCode\LetMigrate\Schema\Blueprint;
+            return new class implements MigrationInterface {
+                public function up(SchemaBuilderInterface \$schema): void {
+                    \$schema->create('{$table}', static function (Blueprint \$t): void { \$t->id(); });
+                }
+                public function down(SchemaBuilderInterface \$schema): void {
+                    \$schema->dropIfExists('{$table}');
+                }
+            };
+            PHP;
+        file_put_contents("{$this->dir}/{$filename}.php", $php);
     }
 }

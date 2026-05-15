@@ -10,6 +10,15 @@ use AlfaCode\LetMigrate\Schema\GrammarInterface;
 
 /**
  * Persists migration state to a tracking table in the database.
+ *
+ * ╔══════════════════════════════════════════════════════════════╗
+ * ║  ARCHITECTURE BOUNDARY — DO NOT INJECT DIRECTLY             ║
+ * ║                                                             ║
+ * ║  This class MUST only be instantiated by MigrationService   ║
+ * ║  via MigrationServiceFactory.  All other application code   ║
+ * ║  must depend on MigrationServiceInterface, never on this    ║
+ * ║  concrete repository class.                                 ║
+ * ╚══════════════════════════════════════════════════════════════╝
  */
 final class DatabaseMigrationRepository implements MigrationRepositoryInterface
 {
@@ -21,18 +30,21 @@ final class DatabaseMigrationRepository implements MigrationRepositoryInterface
 
     public function all(): array
     {
+        $t = $this->driver->quoteIdentifier($this->table);
         $rows = $this->driver->fetchAll(
-            "SELECT * FROM {$this->driver->quoteIdentifier($this->table)} ORDER BY batch ASC, migration ASC",
+            "SELECT * FROM {$t} ORDER BY batch ASC, migration ASC",
         );
 
-        return array_map(static fn($r) => MigrationRecord::fromRow($r), $rows);
+        return array_map(
+            static fn(array $r) => MigrationRecord::fromRow($r),
+            $rows,
+        );
     }
 
     public function lastBatch(): int
     {
-        $row = $this->driver->fetchOne(
-            "SELECT MAX(batch) AS max_batch FROM {$this->driver->quoteIdentifier($this->table)}",
-        );
+        $t = $this->driver->quoteIdentifier($this->table);
+        $row = $this->driver->fetchOne("SELECT MAX(batch) AS max_batch FROM {$t}");
 
         return (int) ($row['max_batch'] ?? 0);
     }
@@ -45,18 +57,23 @@ final class DatabaseMigrationRepository implements MigrationRepositoryInterface
             return [];
         }
 
+        $t = $this->driver->quoteIdentifier($this->table);
         $rows = $this->driver->fetchAll(
-            "SELECT * FROM {$this->driver->quoteIdentifier($this->table)} WHERE batch = ? ORDER BY migration DESC",
+            "SELECT * FROM {$t} WHERE batch = ? ORDER BY migration DESC",
             [$batch],
         );
 
-        return array_map(static fn($r) => MigrationRecord::fromRow($r), $rows);
+        return array_map(
+            static fn(array $r) => MigrationRecord::fromRow($r),
+            $rows,
+        );
     }
 
     public function appliedFilenames(): array
     {
+        $t = $this->driver->quoteIdentifier($this->table);
         $rows = $this->driver->fetchAll(
-            "SELECT migration FROM {$this->driver->quoteIdentifier($this->table)} ORDER BY batch ASC, migration ASC",
+            "SELECT migration FROM {$t} ORDER BY batch ASC, migration ASC",
         );
 
         return array_column($rows, 'migration');
@@ -65,8 +82,8 @@ final class DatabaseMigrationRepository implements MigrationRepositoryInterface
     public function log(string $filename, int $batch): void
     {
         $this->driver->insert($this->table, [
-            'migration'  => $filename,
-            'batch'      => $batch,
+            'migration' => $filename,
+            'batch' => $batch,
             'applied_at' => date('Y-m-d H:i:s'),
         ]);
     }

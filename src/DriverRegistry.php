@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace AlfaCode\LetMigrate;
 
 use AlfaCode\LetMigrate\Contract\DatabaseDriverInterface;
-use AlfaCode\LetMigrate\Contract\SchemaBuilderInterface;
 use AlfaCode\LetMigrate\Driver\MySQL\MySQLDriver;
 use AlfaCode\LetMigrate\Driver\MySQL\MySQLGrammar;
 use AlfaCode\LetMigrate\Driver\PostgreSQL\PostgreSQLDriver;
@@ -19,13 +18,13 @@ use AlfaCode\LetMigrate\Schema\GrammarInterface;
 use AlfaCode\LetMigrate\Schema\SchemaBuilder;
 
 /**
- * Central registry that resolves drivers and grammars by name.
+ * Central registry that resolves database drivers and grammars by name.
  *
- * Supports built-in drivers (mysql, pgsql, sqlite, sqlsrv) and
- * custom drivers registered at runtime.
+ * Supports built-in drivers (mysql, pgsql, sqlite, sqlsrv) and custom
+ * drivers registered at runtime via extendDriver() / extendGrammar().
  *
- * Usage:
- *
+ * Usage
+ * ─────
  *   // From a config array
  *   $registry = DriverRegistry::fromConfig([
  *       'driver'   => 'mysql',
@@ -36,10 +35,11 @@ use AlfaCode\LetMigrate\Schema\SchemaBuilder;
  *       'password' => 'secret',
  *   ]);
  *
- *   $schema = $registry->schemaBuilder();
+ *   // Pre-built driver + grammar pair (useful in tests)
+ *   $registry = DriverRegistry::fromDriverAndGrammar($driver, $grammar);
  *
  *   // Register a custom driver
- *   DriverRegistry::extend('mydb', fn($cfg) => new MyCustomDriver($cfg));
+ *   DriverRegistry::extendDriver('mydb', fn($cfg) => new MyDriver($cfg));
  */
 final class DriverRegistry
 {
@@ -54,32 +54,34 @@ final class DriverRegistry
         private readonly GrammarInterface        $grammar,
     ) {}
 
-    // ── Factory ───────────────────────────────────────────────────
+    // ── Factory methods ───────────────────────────────────────────
 
     /**
      * Build a registry from a configuration array.
      *
-     * Required keys: driver, database
-     * Optional keys depend on the driver (host, port, username, password, …)
-     *
      * @param array<string, mixed> $config
+     *
+     * @throws LetMigrateException for unknown or missing driver key
      */
     public static function fromConfig(array $config): self
     {
-        $driverName = strtolower((string) ($config['driver'] ?? ''));
+        $driverName = mb_strtolower((string) ($config['driver'] ?? ''));
 
         if ($driverName === '') {
-            throw new LetMigrateException("DriverRegistry: 'driver' key is required in config.");
+            throw new LetMigrateException(
+                "DriverRegistry: 'driver' key is required in config.",
+            );
         }
 
-        $driver  = self::resolveDriver($driverName, $config);
-        $grammar = self::resolveGrammar($driverName, $config);
-
-        return new self($driver, $grammar);
+        return new self(
+            self::resolveDriver($driverName, $config),
+            self::resolveGrammar($driverName, $config),
+        );
     }
 
     /**
-     * Build directly from a driver + grammar pair (useful in tests).
+     * Build from a pre-constructed driver + grammar pair.
+     * Useful in tests and when you manage the connection lifecycle yourself.
      */
     public static function fromDriverAndGrammar(
         DatabaseDriverInterface $driver,
@@ -88,26 +90,26 @@ final class DriverRegistry
         return new self($driver, $grammar);
     }
 
-    // ── Extension point ───────────────────────────────────────────
+    // ── Extension points ──────────────────────────────────────────
 
     /**
-     * Register a custom driver factory.
+     * Register a custom driver factory for a new driver name.
      *
      * @param callable(array<string,mixed>): DatabaseDriverInterface $factory
      */
     public static function extendDriver(string $name, callable $factory): void
     {
-        self::$customDrivers[strtolower($name)] = $factory;
+        self::$customDrivers[mb_strtolower($name)] = $factory;
     }
 
     /**
-     * Register a custom grammar factory.
+     * Register a custom grammar factory for a driver name.
      *
      * @param callable(array<string,mixed>): GrammarInterface $factory
      */
     public static function extendGrammar(string $name, callable $factory): void
     {
-        self::$customGrammars[strtolower($name)] = $factory;
+        self::$customGrammars[mb_strtolower($name)] = $factory;
     }
 
     // ── Accessors ─────────────────────────────────────────────────
@@ -122,7 +124,11 @@ final class DriverRegistry
         return $this->grammar;
     }
 
-    public function schemaBuilder(): SchemaBuilderInterface
+    /**
+     * Create a new SchemaBuilder wired to this registry's driver + grammar.
+     * Returns a fresh instance on every call.
+     */
+    public function schemaBuilder(): SchemaBuilder
     {
         return new SchemaBuilder($this->driver, $this->grammar);
     }
@@ -149,21 +155,21 @@ final class DriverRegistry
 
         return match ($name) {
             'mysql', 'mariadb' => new MySQLDriver(
-                host:     (string) ($config['host']     ?? '127.0.0.1'),
-                port:     (int)    ($config['port']     ?? 3306),
+                host: (string) ($config['host'] ?? '127.0.0.1'),
+                port: (int) ($config['port'] ?? 3306),
                 database: (string) ($config['database'] ?? ''),
                 username: (string) ($config['username'] ?? 'root'),
                 password: (string) ($config['password'] ?? ''),
-                charset:  (string) ($config['charset']  ?? 'utf8mb4'),
+                charset: (string) ($config['charset'] ?? 'utf8mb4'),
             ),
 
             'pgsql', 'postgres', 'postgresql' => new PostgreSQLDriver(
-                host:     (string) ($config['host']     ?? '127.0.0.1'),
-                port:     (int)    ($config['port']     ?? 5432),
+                host: (string) ($config['host'] ?? '127.0.0.1'),
+                port: (int) ($config['port'] ?? 5432),
                 database: (string) ($config['database'] ?? ''),
                 username: (string) ($config['username'] ?? 'postgres'),
                 password: (string) ($config['password'] ?? ''),
-                schema:   (string) ($config['schema']   ?? 'public'),
+                schema: (string) ($config['schema'] ?? 'public'),
             ),
 
             'sqlite' => new SQLiteDriver(
@@ -171,16 +177,17 @@ final class DriverRegistry
             ),
 
             'sqlsrv', 'sqlserver', 'mssql' => new SQLServerDriver(
-                host:     (string) ($config['host']     ?? '127.0.0.1'),
-                port:     (int)    ($config['port']     ?? 1433),
+                host: (string) ($config['host'] ?? '127.0.0.1'),
+                port: (int) ($config['port'] ?? 1433),
                 database: (string) ($config['database'] ?? ''),
                 username: (string) ($config['username'] ?? 'sa'),
                 password: (string) ($config['password'] ?? ''),
-                schema:   (string) ($config['schema']   ?? 'dbo'),
+                schema: (string) ($config['schema'] ?? 'dbo'),
             ),
 
             default => throw new LetMigrateException(
-                "Unsupported driver '{$name}'. Supported: " . implode(', ', self::supportedDrivers()),
+                "Unsupported driver '{$name}'. Supported: "
+                    . implode(', ', self::supportedDrivers()),
             ),
         };
     }
@@ -193,11 +200,11 @@ final class DriverRegistry
         }
 
         return match ($name) {
-            'mysql', 'mariadb'               => new MySQLGrammar(),
+            'mysql', 'mariadb' => new MySQLGrammar(),
             'pgsql', 'postgres', 'postgresql' => new PostgreSQLGrammar(),
-            'sqlite'                          => new SQLiteGrammar(),
-            'sqlsrv', 'sqlserver', 'mssql'   => new SQLServerGrammar(),
-            default                           => new MySQLGrammar(),
+            'sqlite' => new SQLiteGrammar(),
+            'sqlsrv', 'sqlserver', 'mssql' => new SQLServerGrammar(),
+            default => new MySQLGrammar(),
         };
     }
 }
