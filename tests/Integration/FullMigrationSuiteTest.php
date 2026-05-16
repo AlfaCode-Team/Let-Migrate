@@ -37,7 +37,7 @@ final class FullMigrationSuiteTest extends TestCase
     protected function setUp(): void
     {
         $this->driver = new SQLiteDriver(':memory:');
-        $this->registry = DriverRegistry::fromDriverAndGrammar($this->driver, new SQLiteGrammar());
+        $this->registry = DriverRegistry::fromDriverAndGrammar("sqlite", $this->driver, new SQLiteGrammar());
         $this->migrationsDir = sys_get_temp_dir() . '/let_migrate_suite_' . uniqid('', true);
         mkdir($this->migrationsDir, 0o777, true);
     }

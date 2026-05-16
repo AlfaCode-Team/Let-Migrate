@@ -62,13 +62,22 @@ final class MigrationServiceFactory
         $schema = $registry->schemaBuilder();
         $events ??= new MigrationEventDispatcher();
 
-        return new MigrationService(
+        $runner = new MigrationRunner(
             repository: $repository,
             resolver: $resolver,
             schema: $schema,
             events: $events,
-            logger: $logger,
+            logger: $logger ?? new NullLogger(),
             pretend: $config->pretend,
+        );
+
+        return new MigrationService(
+            runner: $runner,
+            repository: $repository,
+            resolver: $resolver,
+            schemaBuilder: $schema,
+            dispatcher: $events,
+            paths: $config->paths,
         );
     }
 

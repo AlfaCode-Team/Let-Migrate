@@ -19,11 +19,25 @@ namespace AlfaCode\LetMigrate\Schema;
  *       $t->boolean('is_active')->default(true);
  *       $t->timestamps();
  *   });
+ *
+ * @fixed timestamps() — no longer inlines 'ON UPDATE CURRENT_TIMESTAMP' as a raw
+ *        default string. Uses ColumnDefinition::onUpdateCurrentTimestamp() instead
+ *        so each Grammar can emit the correct dialect-specific DDL (MySQL inline
+ *        keyword vs PostgreSQL trigger).
+ *
+ * @added modifyColumn() — modify an existing column's type/constraints in ALTER mode.
+ * @added renameColumn() — rename a column across all four drivers.
  */
 final class Blueprint
 {
     /** @var ColumnDefinition[] */
     private array $columns = [];
+
+    /** @var ColumnDefinition[] */
+    private array $modifiedColumns = [];
+
+    /** @var array<string, string> from => to */
+    private array $renamedColumns = [];
 
     /** @var IndexDefinition[] */
     private array $indexes = [];
@@ -40,10 +54,8 @@ final class Blueprint
     /** @var string[] */
     private array $droppedForeignKeys = [];
 
-    private string $engine = 'InnoDB';
-
-    private string $charset = 'utf8mb4';
-
+    private string $engine    = 'InnoDB';
+    private string $charset   = 'utf8mb4';
     private string $collation = 'utf8mb4_unicode_ci';
 
     public function __construct(private readonly string $table) {}
@@ -157,20 +169,30 @@ final class Blueprint
     }
 
     /**
-     * Adds `created_at` and `updated_at` DATETIME columns, both nullable.
+     * Add `created_at` and `updated_at` columns.
+     *
+     * FIX: updated_at no longer embeds 'ON UPDATE CURRENT_TIMESTAMP' as a raw
+     * default string. Uses onUpdateCurrentTimestamp() modifier so each Grammar
+     * emits the correct dialect (MySQL inline vs PostgreSQL trigger).
      */
     public function timestamps(): void
     {
-        $this->addColumn('created_at', 'DATETIME')->nullable()->default('CURRENT_TIMESTAMP');
-        $this->addColumn('updated_at', 'DATETIME')->nullable()->default('CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP');
+        $this->addColumn('created_at', 'DATETIME')
+            ->nullable()
+            ->default('CURRENT_TIMESTAMP');
+
+        $this->addColumn('updated_at', 'DATETIME')
+            ->nullable()
+            ->default('CURRENT_TIMESTAMP')
+            ->onUpdateCurrentTimestamp();
     }
 
     /**
-     * Adds a `deleted_at` DATETIME (soft-delete support).
+     * Add a `deleted_at` DATETIME column (soft-delete support).
      */
-    public function softDeletes(): void
+    public function softDeletes(string $column = 'deleted_at'): void
     {
-        $this->addColumn('deleted_at', 'DATETIME')->nullable();
+        $this->addColumn($column, 'DATETIME')->nullable();
     }
 
     // ── Boolean ────────────────────────────────────────────────────
@@ -194,9 +216,7 @@ final class Blueprint
 
     // ── Enum ───────────────────────────────────────────────────────
 
-    /**
-     * @param string[] $allowed
-     */
+    /** @param string[] $allowed */
     public function enum(string $name, array $allowed): ColumnDefinition
     {
         $values = implode(',', array_map(
@@ -209,40 +229,34 @@ final class Blueprint
 
     // ── Indexes ────────────────────────────────────────────────────
 
-    /**
-     * Add a composite primary key.
-     *
-     * @param string[] $columns
-     */
-    public function primary(array $columns): self
+    /** @param string[] $columns */
+    public function primary(array $columns, string $name = ''): void
     {
-        $this->indexes[] = IndexDefinition::primary($columns);
-
-        return $this;
+        $this->indexes[] = new IndexDefinition(
+            $columns,
+            $name ?: 'PRIMARY',
+            'primary',
+        );
     }
 
-    /**
-     * Add a unique index.
-     *
-     * @param string[] $columns
-     */
-    public function unique(array $columns, string $name = ''): self
+    /** @param string[] $columns */
+    public function unique(array $columns, string $name = ''): void
     {
-        $this->indexes[] = IndexDefinition::unique($columns, $name);
-
-        return $this;
+        $this->indexes[] = new IndexDefinition(
+            $columns,
+            $name ?: 'uq_' . implode('_', $columns),
+            'unique',
+        );
     }
 
-    /**
-     * Add a plain index.
-     *
-     * @param string[] $columns
-     */
-    public function index(array $columns, string $name = ''): self
+    /** @param string[] $columns */
+    public function index(array $columns, string $name = ''): void
     {
-        $this->indexes[] = IndexDefinition::index($columns, $name);
-
-        return $this;
+        $this->indexes[] = new IndexDefinition(
+            $columns,
+            $name ?: 'idx_' . implode('_', $columns),
+            'index',
+        );
     }
 
     // ── Foreign keys ───────────────────────────────────────────────
@@ -255,55 +269,80 @@ final class Blueprint
         return $fk;
     }
 
-    // ── Drop helpers (for table() modifications) ───────────────────
+    // ── ALTER: column modification (Tier 1 addition) ──────────────
 
-    public function dropColumn(string ...$names): self
+    /**
+     * Modify an existing column's definition.
+     *
+     * Usage (in a $schema->table() callback):
+     *
+     *   $t->modifyColumn('email', fn(ColumnDefinition $c) =>
+     *       $c->string(320)->unique()->notNull()
+     *   );
+     *
+     * The callback receives a fresh ColumnDefinition pre-populated with the
+     * column name. Callers must re-specify all desired attributes (type,
+     * nullability, default, etc.) because grammars emit the full column DDL.
+     *
+     * Note: SQLite does not support MODIFY COLUMN. The SQLiteGrammar will
+     * implement the recreate-table pattern automatically.
+     *
+     * @param callable(ColumnDefinition): ColumnDefinition $callback
+     */
+    public function modifyColumn(string $name, callable $callback): void
     {
-        foreach ($names as $name) {
-            $this->droppedColumns[] = $name;
-        }
-
-        return $this;
+        $col = $callback(new ColumnDefinition($name, ''));
+        $this->modifiedColumns[] = $col;
     }
 
-    public function dropIndex(string $name): self
+    /**
+     * Rename an existing column.
+     *
+     * Supported by all four drivers (SQLite ≥ 3.25.0, MySQL ≥ 8.0, PG, SQL Server).
+     */
+    public function renameColumn(string $from, string $to): void
+    {
+        $this->renamedColumns[$from] = $to;
+    }
+
+    // ── ALTER: drop ───────────────────────────────────────────────
+
+    public function dropColumn(string $name): void
+    {
+        $this->droppedColumns[] = $name;
+    }
+
+    public function dropIndex(string $name): void
     {
         $this->droppedIndexes[] = $name;
-
-        return $this;
     }
 
-    public function dropForeign(string $name): self
+    public function dropForeign(string $name): void
     {
         $this->droppedForeignKeys[] = $name;
-
-        return $this;
     }
 
-    // ── Table-level options (MySQL / MariaDB) ─────────────────────
+    // ── Table-level options ───────────────────────────────────────
 
     public function engine(string $engine): self
     {
         $this->engine = $engine;
-
         return $this;
     }
 
     public function charset(string $charset): self
     {
         $this->charset = $charset;
-
         return $this;
     }
 
     public function collation(string $collation): self
     {
         $this->collation = $collation;
-
         return $this;
     }
 
-    // ── Accessors (used by SchemaBuilder / GrammarInterface) ──────
+    // ── Accessors ─────────────────────────────────────────────────
 
     public function getTable(): string
     {
@@ -314,6 +353,18 @@ final class Blueprint
     public function getColumns(): array
     {
         return $this->columns;
+    }
+
+    /** @return ColumnDefinition[] */
+    public function getModifiedColumns(): array
+    {
+        return $this->modifiedColumns;
+    }
+
+    /** @return array<string, string> */
+    public function getRenamedColumns(): array
+    {
+        return $this->renamedColumns;
     }
 
     /** @return IndexDefinition[] */
@@ -361,7 +412,7 @@ final class Blueprint
         return $this->collation;
     }
 
-    // ── Private helpers ────────────────────────────────────────────
+    // ── Internal helpers ──────────────────────────────────────────
 
     private function addColumn(string $name, string $type): ColumnDefinition
     {

@@ -5,14 +5,19 @@ declare(strict_types=1);
 namespace AlfaCode\LetMigrate;
 
 use AlfaCode\LetMigrate\Contract\DatabaseDriverInterface;
+use AlfaCode\LetMigrate\Contract\SchemaInspectorInterface;
 use AlfaCode\LetMigrate\Driver\MySQL\MySQLDriver;
 use AlfaCode\LetMigrate\Driver\MySQL\MySQLGrammar;
+use AlfaCode\LetMigrate\Driver\MySQL\MySQLSchemaInspector;
 use AlfaCode\LetMigrate\Driver\PostgreSQL\PostgreSQLDriver;
 use AlfaCode\LetMigrate\Driver\PostgreSQL\PostgreSQLGrammar;
+use AlfaCode\LetMigrate\Driver\PostgreSQL\PostgreSQLSchemaInspector;
 use AlfaCode\LetMigrate\Driver\SQLite\SQLiteDriver;
 use AlfaCode\LetMigrate\Driver\SQLite\SQLiteGrammar;
+use AlfaCode\LetMigrate\Driver\SQLite\SQLiteSchemaInspector;
 use AlfaCode\LetMigrate\Driver\SQLServer\SQLServerDriver;
 use AlfaCode\LetMigrate\Driver\SQLServer\SQLServerGrammar;
+use AlfaCode\LetMigrate\Driver\SQLServer\SQLServerSchemaInspector;
 use AlfaCode\LetMigrate\Exception\LetMigrateException;
 use AlfaCode\LetMigrate\Schema\GrammarInterface;
 use AlfaCode\LetMigrate\Schema\SchemaBuilder;
@@ -40,6 +45,11 @@ use AlfaCode\LetMigrate\Schema\SchemaBuilder;
  *
  *   // Register a custom driver
  *   DriverRegistry::extendDriver('mydb', fn($cfg) => new MyDriver($cfg));
+ * 
+ *   @updated makeInspector() — resolves the correct SchemaInspectorInterface
+ *          implementation for the active driver and returns it. Called by
+ *          LetMigrate::inspect() and by SchemaBuilder when one is needed.
+ *
  */
 final class DriverRegistry
 {
@@ -50,9 +60,11 @@ final class DriverRegistry
     private static array $customGrammars = [];
 
     private function __construct(
+        private readonly string $driverKey,
         private readonly DatabaseDriverInterface $driver,
-        private readonly GrammarInterface        $grammar,
-    ) {}
+        private readonly GrammarInterface $grammar,
+    ) {
+    }
 
     // ── Factory methods ───────────────────────────────────────────
 
@@ -74,6 +86,7 @@ final class DriverRegistry
         }
 
         return new self(
+            $driverName,
             self::resolveDriver($driverName, $config),
             self::resolveGrammar($driverName, $config),
         );
@@ -84,10 +97,11 @@ final class DriverRegistry
      * Useful in tests and when you manage the connection lifecycle yourself.
      */
     public static function fromDriverAndGrammar(
+        string $driverKey,
         DatabaseDriverInterface $driver,
-        GrammarInterface        $grammar,
+        GrammarInterface $grammar,
     ): self {
-        return new self($driver, $grammar);
+        return new self($driverKey, $driver, $grammar);
     }
 
     // ── Extension points ──────────────────────────────────────────
@@ -122,6 +136,41 @@ final class DriverRegistry
     public function grammar(): GrammarInterface
     {
         return $this->grammar;
+    }
+    /**
+     * Resolve the correct SchemaInspectorInterface for the active driver.
+     *
+     * Mapping:
+     *   mysql / mariadb  → MySQLSchemaInspector
+     *   pgsql            → PostgreSQLSchemaInspector (schema from config['schema'] ?? 'public')
+     *   sqlite           → SQLiteSchemaInspector
+     *   sqlsrv           → SQLServerSchemaInspector (schema from config['schema'] ?? 'dbo')
+     *
+     * Called by LetMigrate::inspect() and SchemaBuilder when an inspector is needed.
+     */
+    public function makeInspector(): SchemaInspectorInterface
+    {
+        $driver = $this->driver();
+        $key = $this->driverKey;
+        $schema = (string) ($this->config['schema'] ?? '');
+
+        return match ($key) {
+            'mysql', 'mariadb' =>
+            new MySQLSchemaInspector($driver),
+
+            'pgsql', 'postgresql' =>
+            new PostgreSQLSchemaInspector($driver, $schema !== '' ? $schema : 'public'),
+
+            'sqlite' =>
+            new SQLiteSchemaInspector($driver),
+
+            'sqlsrv', 'sqlserver', 'mssql' =>
+            new SQLServerSchemaInspector($driver, $schema !== '' ? $schema : 'dbo'),
+
+            default => throw new LetMigrateException(
+                "No SchemaInspector available for driver '{$key}'.",
+            ),
+        };
     }
 
     /**
@@ -187,7 +236,7 @@ final class DriverRegistry
 
             default => throw new LetMigrateException(
                 "Unsupported driver '{$name}'. Supported: "
-                    . implode(', ', self::supportedDrivers()),
+                . implode(', ', self::supportedDrivers()),
             ),
         };
     }

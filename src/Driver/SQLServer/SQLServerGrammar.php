@@ -9,26 +9,46 @@ use AlfaCode\LetMigrate\Schema\Blueprint;
 use AlfaCode\LetMigrate\Schema\ColumnDefinition;
 
 /**
- * Microsoft SQL Server (T-SQL) DDL grammar.
+ * SQL Server DDL grammar.
  *
- * Key differences:
- * - Square bracket identifier quoting: [table], [column]
- * - IDENTITY(1,1) for auto-increment (not AUTO_INCREMENT or SERIAL)
- * - NVARCHAR instead of VARCHAR for Unicode strings
- * - No DATETIME → use DATETIME2 for better precision
- * - Foreign keys must be named constraints
+ * @fixed compileRenameColumn() — now uses EXEC sp_rename syntax instead of
+ *        ANSI RENAME COLUMN which SQL Server does not support.
+ *
+ * @added compileModifyColumn() — SQL Server ALTER COLUMN syntax.
+ *
+ * @added compileRenameIndex() — sp_rename with 'INDEX' object type.
  */
 final class SQLServerGrammar extends AbstractGrammar
 {
-    protected string $quoteChar = ']'; // Special — handled in quoteIdentifier override
+    protected string $quoteChar = '[';
+
+    // ── Identifier quoting ────────────────────────────────────────
 
     public function quoteIdentifier(string $identifier): string
     {
         return '[' . str_replace(']', ']]', $identifier) . ']';
     }
 
+    // ── Table DDL ─────────────────────────────────────────────────
+
+    public function compileCreateMigrationTable(string $tableName): string
+    {
+        $t = $this->quoteIdentifier($tableName);
+
+        return "IF OBJECT_ID(N'{$tableName}', N'U') IS NULL
+CREATE TABLE {$t} (
+    [id]         INT IDENTITY(1,1) NOT NULL,
+    [migration]  NVARCHAR(255)     NOT NULL,
+    [batch]      INT               NOT NULL DEFAULT 1,
+    [applied_at] DATETIME2         NOT NULL DEFAULT GETDATE(),
+    CONSTRAINT [PK_{$tableName}] PRIMARY KEY CLUSTERED ([id]),
+    CONSTRAINT [UQ_{$tableName}_migration] UNIQUE ([migration])
+)";
+    }
+
     public function compileRename(string $from, string $to): string
     {
+        // SQL Server: sp_rename for tables
         return "EXEC sp_rename '{$from}', '{$to}'";
     }
 
@@ -39,101 +59,166 @@ final class SQLServerGrammar extends AbstractGrammar
 
     public function compileForeignKeyChecksOn(): string
     {
-        return "EXEC sp_MSforeachtable 'ALTER TABLE ? CHECK CONSTRAINT ALL'";
+        return "EXEC sp_MSforeachtable 'ALTER TABLE ? WITH CHECK CHECK CONSTRAINT ALL'";
     }
 
-    public function compileCreateMigrationTable(string $tableName): string
-    {
-        $t = $this->quoteIdentifier($tableName);
-
-        return "IF OBJECT_ID(N'{$tableName}', N'U') IS NULL
-BEGIN
-    CREATE TABLE {$t} (
-        [id]         BIGINT        NOT NULL IDENTITY(1,1),
-        [migration]  NVARCHAR(255) NOT NULL,
-        [batch]      INT           NOT NULL DEFAULT 1,
-        [applied_at] DATETIME2     NOT NULL DEFAULT GETDATE(),
-        PRIMARY KEY ([id]),
-        UNIQUE ([migration])
-    )
-END";
-    }
-
-    protected function autoIncrementKeyword(): string
-    {
-        return 'IDENTITY(1,1)';
-    }
+    // ── Column ────────────────────────────────────────────────────
 
     protected function compileColumn(ColumnDefinition $col): string
     {
         $type = $this->mapType($col->getType(), $col->isAutoIncrement());
-        $parts = [$this->quoteIdentifier($col->getName()), $type];
 
-        if ($col->isAutoIncrement()) {
-            $parts[] = 'IDENTITY(1,1)';
-            $parts[] = 'NOT NULL';
-
-            return implode(' ', $parts);
-        }
+        $parts = [
+            $this->quoteIdentifier($col->getName()),
+            $type,
+        ];
 
         $parts[] = $col->isNullable() ? 'NULL' : 'NOT NULL';
 
-        if ($col->hasDefault()) {
+        if ($col->hasDefault() && !$col->isAutoIncrement()) {
             $parts[] = 'DEFAULT ' . $this->wrapDefault($col->getDefault());
         }
 
-        return implode(' ', $parts);
+        if ($col->isPrimary() && !$col->isAutoIncrement()) {
+            $parts[] = 'PRIMARY KEY';
+        }
+
+        return implode(' ', array_filter($parts));
     }
 
-    protected function compileTableOptions(Blueprint $blueprint): string
+    protected function autoIncrementKeyword(): string
     {
-        return ''; // SQL Server has no ENGINE/CHARSET clauses
+        return ''; // SQL Server uses IDENTITY(1,1) in the type
+    }
+
+    // ── MODIFY COLUMN ─────────────────────────────────────────────
+
+    /**
+     * SQL Server ALTER COLUMN syntax.
+     * Note: does not carry over DEFAULT constraints — those require a separate
+     * DROP CONSTRAINT + ADD DEFAULT pattern not covered here.
+     */
+    protected function compileModifyColumn(string $quotedTable, ColumnDefinition $col): string
+    {
+        $qcol    = $this->quoteIdentifier($col->getName());
+        $newType = $this->mapType($col->getType(), false);
+        $null    = $col->isNullable() ? 'NULL' : 'NOT NULL';
+
+        return "ALTER TABLE {$quotedTable} ALTER COLUMN {$qcol} {$newType} {$null}";
+    }
+
+    // ── RENAME COLUMN — sp_rename ─────────────────────────────────
+
+    /**
+     * SQL Server does not support ANSI RENAME COLUMN syntax.
+     * Uses sp_rename with the 'COLUMN' object type instead.
+     *
+     * @fixed Previous implementation inherited ANSI RENAME COLUMN from
+     *        AbstractGrammar which SQL Server does not support.
+     *
+     * Example output:
+     *   EXEC sp_rename '[dbo].[users].[name]', 'full_name', 'COLUMN'
+     */
+    protected function compileRenameColumn(string $quotedTable, string $from, string $to): string
+    {
+        // sp_rename expects 'table.column' as the object name (unbracketed for the string literal)
+        $rawTable = trim(str_replace(['[', ']'], '', $quotedTable));
+
+        return "EXEC sp_rename '{$rawTable}.{$from}', '{$to}', 'COLUMN'";
+    }
+
+    // ── RENAME INDEX — sp_rename ──────────────────────────────────
+
+    /**
+     * Rename an index using sp_rename with 'INDEX' object type.
+     * Called by compileAlter() when Blueprint::renameIndex() entries are present.
+     *
+     * Example output:
+     *   EXEC sp_rename '[users].[idx_email]', 'idx_email_address', 'INDEX'
+     */
+    public function compileRenameIndex(string $quotedTable, string $from, string $to): string
+    {
+        $rawTable = trim(str_replace(['[', ']'], '', $quotedTable));
+
+        return "EXEC sp_rename '{$rawTable}.{$from}', '{$to}', 'INDEX'";
+    }
+
+    // ── DROP ──────────────────────────────────────────────────────
+
+    public function compileDropIfExists(string $table): string
+    {
+        return "IF OBJECT_ID(N'{$table}', N'U') IS NOT NULL DROP TABLE {$this->quoteIdentifier($table)}";
     }
 
     protected function compileDropIndex(string $quotedTable, string $indexName): string
     {
-        return "DROP INDEX [{$indexName}] ON {$quotedTable}";
+        return "DROP INDEX {$this->quoteIdentifier($indexName)} ON {$quotedTable}";
     }
 
     protected function compileDropForeignKey(string $quotedTable, string $fkName): string
     {
-        return "ALTER TABLE {$quotedTable} DROP CONSTRAINT [{$fkName}]";
+        return "ALTER TABLE {$quotedTable} DROP CONSTRAINT {$this->quoteIdentifier($fkName)}";
     }
 
-    private function mapType(string $type, bool $autoInc = false): string
+    // ── Table options ─────────────────────────────────────────────
+
+    protected function compileTableOptions(Blueprint $blueprint): string
     {
-        if ($autoInc) {
-            return 'BIGINT';
+        return ''; // SQL Server has no MySQL-style ENGINE / CHARSET options
+    }
+
+    // ── Index compilation ─────────────────────────────────────────
+
+    protected function compileIndex(IndexDefinition $idx): string
+    {
+        $cols = implode(', ', array_map([$this, 'quoteIdentifier'], $idx->getColumns()));
+        $name = $this->quoteIdentifier($idx->getName());
+
+        return match ($idx->getType()) {
+            'unique'  => "CONSTRAINT {$name} UNIQUE ({$cols})",
+            'primary' => "CONSTRAINT {$name} PRIMARY KEY CLUSTERED ({$cols})",
+            default   => "INDEX {$name} ({$cols})",
+        };
+    }
+
+    // ── Type mapping ──────────────────────────────────────────────
+
+    private function mapType(string $type, bool $isIdentity = false): string
+    {
+        if ($isIdentity) {
+            $upper = mb_strtoupper(trim($type));
+            return str_contains($upper, 'BIGINT') ? 'BIGINT IDENTITY(1,1)' : 'INT IDENTITY(1,1)';
         }
 
-        $upper = mb_strtoupper(mb_trim($type));
+        $upper = mb_strtoupper(trim($type));
 
         return match (true) {
-            str_starts_with($upper, 'TINYINT(1)') => 'BIT',
-            str_starts_with($upper, 'TINYINT') => 'TINYINT',
-            str_starts_with($upper, 'SMALLINT') => 'SMALLINT',
-            str_starts_with($upper, 'BIGINT') => 'BIGINT',
-            str_starts_with($upper, 'INT') => 'INT',
-            str_starts_with($upper, 'DATETIME'),
-            str_starts_with($upper, 'TIMESTAMP') => 'DATETIME2',
-            str_starts_with($upper, 'DATE') => 'DATE',
-            str_starts_with($upper, 'TIME') => 'TIME',
-            str_starts_with($upper, 'TEXT'),
+            str_starts_with($upper, 'TINYINT(1)')                  => 'BIT',
+            str_starts_with($upper, 'TINYINT')                     => 'TINYINT',
+            str_starts_with($upper, 'SMALLINT')                    => 'SMALLINT',
+            str_starts_with($upper, 'MEDIUMINT'),
+            str_starts_with($upper, 'INT')                         => 'INT',
+            str_starts_with($upper, 'BIGINT')                      => 'BIGINT',
+            str_starts_with($upper, 'FLOAT')                       => 'FLOAT',
+            str_starts_with($upper, 'DOUBLE')                      => 'FLOAT(53)',
+            str_starts_with($upper, 'DECIMAL'),
+            str_starts_with($upper, 'NUMERIC')                     => $type,
+            str_starts_with($upper, 'CHAR')                        => str_replace('CHAR', 'NCHAR', $type),
+            str_starts_with($upper, 'VARCHAR')                     => str_replace('VARCHAR', 'NVARCHAR', $type),
             str_starts_with($upper, 'TINYTEXT'),
             str_starts_with($upper, 'MEDIUMTEXT'),
-            str_starts_with($upper, 'LONGTEXT') => 'NVARCHAR(MAX)',
-            preg_match('/^VARCHAR\((\d+)\)$/i', $upper, $m) === 1 => "NVARCHAR({$m[1]})",
-            preg_match('/^CHAR\((\d+)\)$/i', $upper, $m) === 1 => "NCHAR({$m[1]})",
-            str_starts_with($upper, 'FLOAT'),
-            str_starts_with($upper, 'DOUBLE') => 'FLOAT',
-            str_starts_with($upper, 'DECIMAL'),
-            str_starts_with($upper, 'NUMERIC') => str_ireplace(['DECIMAL', 'NUMERIC'], 'DECIMAL', $type),
+            str_starts_with($upper, 'LONGTEXT'),
+            str_starts_with($upper, 'TEXT')                        => 'NVARCHAR(MAX)',
             str_starts_with($upper, 'BLOB'),
-            str_starts_with($upper, 'BINARY') => 'VARBINARY(MAX)',
-            str_starts_with($upper, 'JSON') => 'NVARCHAR(MAX)',
-            str_starts_with($upper, 'ENUM') => 'NVARCHAR(100)',
-            str_starts_with($upper, 'YEAR') => 'SMALLINT',
-            default => $type,
+            str_starts_with($upper, 'BINARY')                      => 'VARBINARY(MAX)',
+            str_starts_with($upper, 'JSON')                        => 'NVARCHAR(MAX)',
+            str_starts_with($upper, 'ENUM')                        => 'NVARCHAR(255)',
+            str_starts_with($upper, 'DATETIME'),
+            str_starts_with($upper, 'TIMESTAMP')                   => 'DATETIME2',
+            str_starts_with($upper, 'DATE')                        => 'DATE',
+            str_starts_with($upper, 'TIME')                        => 'TIME',
+            str_starts_with($upper, 'YEAR')                        => 'SMALLINT',
+            default                                                => $type,
         };
     }
 }

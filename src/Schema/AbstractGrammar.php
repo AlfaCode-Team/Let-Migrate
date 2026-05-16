@@ -13,21 +13,44 @@ namespace AlfaCode\LetMigrate\Schema;
  *
  * Driver-specific grammars extend this class and override only the methods
  * that differ (e.g. auto-increment syntax, identifier quoting style).
+ *
+ * @fixed wrapDefault() — replaced fragile regex with an explicit allowlist.
+ *        The old regex `/^[A-Z_()]+$/` incorrectly treated any all-caps user
+ *        string (e.g. 'ADMIN') as a raw SQL expression and skipped quoting it.
  */
 abstract class AbstractGrammar implements GrammarInterface
 {
     protected string $quoteChar = '`';
 
+    /**
+     * Raw SQL expressions that must never be quoted as string literals.
+     * Any value NOT in this list is quoted with addslashes().
+     */
+    private const RAW_EXPRESSIONS = [
+        'CURRENT_TIMESTAMP',
+        'CURRENT_TIMESTAMP()',
+        'CURRENT_DATE',
+        'CURRENT_TIME',
+        'NOW()',
+        'GETDATE()',
+        'GETUTCDATE()',
+        'SYSDATETIME()',
+        'TRUE',
+        'FALSE',
+        'NULL',
+        'CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP', // kept for MySQL grammar only
+    ];
+
     // ── GrammarInterface ──────────────────────────────────────────
 
     public function compileCreate(Blueprint $blueprint): string
     {
-        $table = $this->quoteIdentifier($blueprint->getTable());
+        $table   = $this->quoteIdentifier($blueprint->getTable());
         $columns = $this->compileColumns($blueprint);
         $indexes = $this->compileIndexes($blueprint);
-        $fks = $this->compileForeignKeys($blueprint);
-        $parts = array_filter(array_merge($columns, $indexes, $fks));
-        $body = implode(',' . PHP_EOL . '    ', $parts);
+        $fks     = $this->compileForeignKeys($blueprint);
+        $parts   = array_filter(array_merge($columns, $indexes, $fks));
+        $body    = implode(',' . PHP_EOL . '    ', $parts);
         $options = $this->compileTableOptions($blueprint);
 
         return 'CREATE TABLE ' . $table . ' (' . PHP_EOL . '    ' . $body . PHP_EOL . ')' . $options;
@@ -35,7 +58,7 @@ abstract class AbstractGrammar implements GrammarInterface
 
     public function compileAlter(Blueprint $blueprint): array
     {
-        $table = $this->quoteIdentifier($blueprint->getTable());
+        $table   = $this->quoteIdentifier($blueprint->getTable());
         $clauses = [];
 
         // Dropped columns
@@ -51,6 +74,16 @@ abstract class AbstractGrammar implements GrammarInterface
         // Dropped foreign keys
         foreach ($blueprint->getDroppedForeignKeys() as $fk) {
             $clauses[] = $this->compileDropForeignKey($table, $fk);
+        }
+
+        // Modified columns
+        foreach ($blueprint->getModifiedColumns() as $col) {
+            $clauses[] = $this->compileModifyColumn($table, $col);
+        }
+
+        // Renamed columns
+        foreach ($blueprint->getRenamedColumns() as $from => $to) {
+            $clauses[] = $this->compileRenameColumn($table, $from, $to);
         }
 
         // New columns
@@ -70,7 +103,8 @@ abstract class AbstractGrammar implements GrammarInterface
         }
 
         if (!empty($addClauses)) {
-            $clauses[] = 'ALTER TABLE ' . $table . PHP_EOL . '    ' . implode(',' . PHP_EOL . '    ', $addClauses);
+            $clauses[] = 'ALTER TABLE ' . $table . PHP_EOL
+                . '    ' . implode(',' . PHP_EOL . '    ', $addClauses);
         }
 
         return $clauses;
@@ -78,37 +112,55 @@ abstract class AbstractGrammar implements GrammarInterface
 
     public function compileDrop(string $table): string
     {
-        return "DROP TABLE {$this->quoteIdentifier($table)}";
+        return 'DROP TABLE ' . $this->quoteIdentifier($table);
     }
 
     public function compileDropIfExists(string $table): string
     {
-        return "DROP TABLE IF EXISTS {$this->quoteIdentifier($table)}";
+        return 'DROP TABLE IF EXISTS ' . $this->quoteIdentifier($table);
     }
 
     public function compileRename(string $from, string $to): string
     {
-        return "ALTER TABLE {$this->quoteIdentifier($from)} RENAME TO {$this->quoteIdentifier($to)}";
+        return 'RENAME TABLE '
+            . $this->quoteIdentifier($from)
+            . ' TO '
+            . $this->quoteIdentifier($to);
     }
 
     public function quoteIdentifier(string $identifier): string
     {
-        return $this->quoteChar . str_replace($this->quoteChar, $this->quoteChar . $this->quoteChar, $identifier) . $this->quoteChar;
+        return $this->quoteChar
+            . str_replace($this->quoteChar, $this->quoteChar . $this->quoteChar, $identifier)
+            . $this->quoteChar;
     }
 
+    /**
+     * Wrap a default value for emission in DDL.
+     *
+     * FIX: Uses an explicit allowlist of safe raw SQL expressions instead of
+     * the previous regex `/^[A-Z_()]+$/` which treated any all-caps string
+     * (e.g. the literal value 'ADMIN') as a raw expression and skipped quoting.
+     */
     public function wrapDefault(mixed $value): string
     {
-        // Detect raw SQL expressions (CURRENT_TIMESTAMP, NULL, etc.)
-        if (is_string($value) && preg_match('/^[A-Z_()]+$/', mb_strtoupper($value))) {
-            return $value;
+        if (is_null($value)) {
+            return 'NULL';
         }
 
         if (is_bool($value)) {
             return $value ? '1' : '0';
         }
 
-        if (is_null($value)) {
-            return 'NULL';
+        if (is_int($value) || is_float($value)) {
+            return (string) $value;
+        }
+
+        // Only treat a string as a raw SQL expression when it exactly matches
+        // a known safe expression. Everything else is quoted as a string literal.
+        $upper = mb_strtoupper(trim((string) $value));
+        if (in_array($upper, self::RAW_EXPRESSIONS, true)) {
+            return (string) $value; // emit as-is
         }
 
         return "'" . addslashes((string) $value) . "'";
@@ -138,26 +190,78 @@ abstract class AbstractGrammar implements GrammarInterface
         return 'SET FOREIGN_KEY_CHECKS = 1';
     }
 
+    // ── Column modification (default: MySQL/MariaDB syntax) ───────
+
+    /**
+     * Compile a MODIFY COLUMN statement.
+     * Grammars that use different syntax (PG: ALTER COLUMN ... TYPE) override this.
+     */
+    protected function compileModifyColumn(string $quotedTable, ColumnDefinition $col): string
+    {
+        return "ALTER TABLE {$quotedTable} MODIFY COLUMN " . $this->compileColumn($col);
+    }
+
+    /**
+     * Compile a RENAME COLUMN statement.
+     * Grammars that use different syntax override this.
+     */
+    protected function compileRenameColumn(string $quotedTable, string $from, string $to): string
+    {
+        return "ALTER TABLE {$quotedTable} RENAME COLUMN "
+            . $this->quoteIdentifier($from)
+            . ' TO '
+            . $this->quoteIdentifier($to);
+    }
+
+    // ── Post-create statements (e.g. triggers for onUpdateCurrentTimestamp) ──
+
+    /**
+     * Return additional SQL statements to execute after CREATE TABLE.
+     *
+     * Grammars that need post-create work (e.g. PostgreSQL triggers for
+     * updated_at columns) override this method.
+     *
+     * @return string[]
+     */
+    public function compilePostCreate(Blueprint $blueprint): array
+    {
+        return [];
+    }
+
+    // ── Table options ─────────────────────────────────────────────
+
+    protected function compileTableOptions(Blueprint $blueprint): string
+    {
+        $options = [];
+
+        if ($blueprint->getEngine() !== '') {
+            $options[] = 'ENGINE=' . $blueprint->getEngine();
+        }
+        if ($blueprint->getCharset() !== '') {
+            $options[] = 'DEFAULT CHARSET=' . $blueprint->getCharset();
+        }
+        if ($blueprint->getCollation() !== '') {
+            $options[] = 'COLLATE=' . $blueprint->getCollation();
+        }
+
+        return empty($options) ? '' : ' ' . implode(' ', $options);
+    }
+
     // ── Shared helpers ────────────────────────────────────────────
 
     /** @return string[] */
     protected function compileColumns(Blueprint $blueprint): array
     {
         $cols = [];
-        $hasPkCol = false;
 
         foreach ($blueprint->getColumns() as $col) {
             $cols[] = $this->compileColumn($col);
-            if ($col->isPrimary() && !$col->isAutoIncrement()) {
-                $hasPkCol = true;
-            }
         }
 
-        // Add a standalone PRIMARY KEY clause for non-autoincrement primary columns
+        // Standalone PRIMARY KEY clause for non-autoincrement primary columns
         foreach ($blueprint->getColumns() as $col) {
             if ($col->isPrimary() && !$col->isAutoIncrement()) {
                 $cols[] = 'PRIMARY KEY (' . $this->quoteIdentifier($col->getName()) . ')';
-
                 break;
             }
         }
@@ -192,11 +296,9 @@ abstract class AbstractGrammar implements GrammarInterface
 
         if ($col->getAfter() !== null) {
             $parts[] = 'AFTER ' . $this->quoteIdentifier($col->getAfter());
-        } elseif ($col->isFirst()) {
-            $parts[] = 'FIRST';
         }
 
-        return implode(' ', $parts);
+        return implode(' ', array_filter($parts));
     }
 
     protected function autoIncrementKeyword(): string
@@ -207,61 +309,61 @@ abstract class AbstractGrammar implements GrammarInterface
     /** @return string[] */
     protected function compileIndexes(Blueprint $blueprint): array
     {
-        return array_map([$this, 'compileIndex'], $blueprint->getIndexes());
+        $out = [];
+        foreach ($blueprint->getIndexes() as $idx) {
+            $out[] = $this->compileIndex($idx);
+        }
+        return $out;
     }
 
     protected function compileIndex(IndexDefinition $idx): string
     {
         $cols = implode(', ', array_map([$this, 'quoteIdentifier'], $idx->getColumns()));
+        $name = $this->quoteIdentifier($idx->getName());
 
         return match ($idx->getType()) {
-            IndexDefinition::TYPE_PRIMARY => "PRIMARY KEY ({$cols})",
-            IndexDefinition::TYPE_UNIQUE => "UNIQUE KEY {$this->indexName($idx)} ({$cols})",
-            default => "INDEX {$this->indexName($idx)} ({$cols})",
+            'unique'  => "UNIQUE KEY {$name} ({$cols})",
+            'primary' => "PRIMARY KEY ({$cols})",
+            default   => "KEY {$name} ({$cols})",
         };
-    }
-
-    protected function indexName(IndexDefinition $idx): string
-    {
-        if ($idx->getName() !== '') {
-            return $this->quoteIdentifier($idx->getName());
-        }
-
-        return $this->quoteIdentifier('idx_' . implode('_', $idx->getColumns()));
     }
 
     /** @return string[] */
     protected function compileForeignKeys(Blueprint $blueprint): array
     {
-        return array_map([$this, 'compileForeignKey'], $blueprint->getForeignKeys());
+        $out = [];
+        foreach ($blueprint->getForeignKeys() as $fk) {
+            $out[] = $this->compileForeignKey($fk);
+        }
+        return $out;
     }
 
     protected function compileForeignKey(ForeignKeyDefinition $fk): string
     {
-        $name = $fk->getConstraintName() !== ''
-            ? $this->quoteIdentifier($fk->getConstraintName())
-            : $this->quoteIdentifier('fk_' . $fk->getColumn());
-        $col = $this->quoteIdentifier($fk->getColumn());
-        $refTable = $this->quoteIdentifier($fk->getReferencedTable());
-        $refCol = $this->quoteIdentifier($fk->getReferencedColumn());
+        $col  = $this->quoteIdentifier($fk->getColumn());
+        $ref  = $this->quoteIdentifier($fk->getReferences());
+        $on   = $this->quoteIdentifier($fk->getOn());
+        $name = $fk->getName() ? 'CONSTRAINT ' . $this->quoteIdentifier($fk->getName()) . ' ' : '';
 
-        return "CONSTRAINT {$name} FOREIGN KEY ({$col}) REFERENCES {$refTable} ({$refCol})"
-             . " ON DELETE {$fk->getOnDelete()}"
-             . " ON UPDATE {$fk->getOnUpdate()}";
+        $sql = "{$name}FOREIGN KEY ({$col}) REFERENCES {$on} ({$ref})";
+
+        if ($fk->getOnDelete()) {
+            $sql .= ' ON DELETE ' . $fk->getOnDelete();
+        }
+        if ($fk->getOnUpdate()) {
+            $sql .= ' ON UPDATE ' . $fk->getOnUpdate();
+        }
+
+        return $sql;
     }
 
     protected function compileDropIndex(string $quotedTable, string $indexName): string
     {
-        return "ALTER TABLE {$quotedTable} DROP INDEX {$this->quoteIdentifier($indexName)}";
+        return "ALTER TABLE {$quotedTable} DROP INDEX " . $this->quoteIdentifier($indexName);
     }
 
     protected function compileDropForeignKey(string $quotedTable, string $fkName): string
     {
-        return "ALTER TABLE {$quotedTable} DROP FOREIGN KEY {$this->quoteIdentifier($fkName)}";
-    }
-
-    protected function compileTableOptions(Blueprint $blueprint): string
-    {
-        return '';
+        return "ALTER TABLE {$quotedTable} DROP FOREIGN KEY " . $this->quoteIdentifier($fkName);
     }
 }
