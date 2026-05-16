@@ -286,7 +286,7 @@ final class MigrationRunnerTest extends TestCase
         $this->writeMigration('2024_01_01_000001_create_alpha', 'alpha');
 
         $service = MigrationServiceFactory::create(
-            DriverRegistry::fromDriverAndGrammar($this->driver, $this->grammar),
+            DriverRegistry::fromDriverAndGrammar("sqlite", $this->driver, $this->grammar),
             MigrationConfig::fromArray(['paths' => [$this->migrationsDir]]),
         );
 
@@ -300,7 +300,7 @@ final class MigrationRunnerTest extends TestCase
         $this->writeMigration('2024_01_01_000001_create_alpha', 'alpha');
 
         $engine = LetMigrate::fromRegistry(
-            DriverRegistry::fromDriverAndGrammar($this->driver, $this->grammar),
+            DriverRegistry::fromDriverAndGrammar("sqlite", $this->driver, $this->grammar),
             ['paths' => [$this->migrationsDir]],
         );
 
@@ -315,7 +315,7 @@ final class MigrationRunnerTest extends TestCase
         $this->writeMigration('2024_01_01_000002_create_beta', 'beta');
 
         $engine = LetMigrate::fromRegistry(
-            DriverRegistry::fromDriverAndGrammar($this->driver, $this->grammar),
+            DriverRegistry::fromDriverAndGrammar("sqlite", $this->driver, $this->grammar),
             ['paths' => [$this->migrationsDir]],
         );
 
@@ -324,7 +324,7 @@ final class MigrationRunnerTest extends TestCase
         $this->writeMigration('2024_01_01_000003_create_gamma', 'gamma');
 
         $engine2 = LetMigrate::fromRegistry(
-            DriverRegistry::fromDriverAndGrammar($this->driver, $this->grammar),
+            DriverRegistry::fromDriverAndGrammar("sqlite", $this->driver, $this->grammar),
             ['paths' => [$this->migrationsDir]],
         );
 
@@ -338,7 +338,7 @@ final class MigrationRunnerTest extends TestCase
     public function test_let_migrate_facade_does_not_expose_repository(): void
     {
         $engine = LetMigrate::fromRegistry(
-            DriverRegistry::fromDriverAndGrammar($this->driver, $this->grammar),
+            DriverRegistry::fromDriverAndGrammar("sqlite", $this->driver, $this->grammar),
             ['paths' => [$this->migrationsDir]],
         );
 

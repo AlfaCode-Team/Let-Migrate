@@ -118,7 +118,7 @@ final class DriverRegistryTest extends TestCase
     {
         $driver = new SQLiteDriver(':memory:');
         $grammar = new SQLiteGrammar();
-        $registry = DriverRegistry::fromDriverAndGrammar($driver, $grammar);
+        $registry = DriverRegistry::fromDriverAndGrammar("sqlite", $driver, $grammar);
 
         $this->assertSame($driver, $registry->driver());
         $this->assertSame($grammar, $registry->grammar());
@@ -129,6 +129,7 @@ final class DriverRegistryTest extends TestCase
     public function test_schema_builder_returns_schema_builder_instance(): void
     {
         $registry = DriverRegistry::fromDriverAndGrammar(
+            "sqlite",
             new SQLiteDriver(':memory:'),
             new SQLiteGrammar(),
         );
@@ -139,6 +140,7 @@ final class DriverRegistryTest extends TestCase
     public function test_schema_builder_returns_new_instance_each_call(): void
     {
         $registry = DriverRegistry::fromDriverAndGrammar(
+            "sqlite",
             new SQLiteDriver(':memory:'),
             new SQLiteGrammar(),
         );

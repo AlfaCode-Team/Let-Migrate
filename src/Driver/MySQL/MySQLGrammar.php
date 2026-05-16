@@ -6,59 +6,83 @@ namespace AlfaCode\LetMigrate\Driver\MySQL;
 
 use AlfaCode\LetMigrate\Schema\AbstractGrammar;
 use AlfaCode\LetMigrate\Schema\Blueprint;
+use AlfaCode\LetMigrate\Schema\ColumnDefinition;
 
 /**
  * MySQL / MariaDB DDL grammar.
  *
- * Generates MySQL-dialect CREATE TABLE, ALTER TABLE, and supporting DDL.
- * Differences from the base: ENGINE / CHARSET / COLLATE table options,
- * backtick identifier quoting, and AUTO_INCREMENT primary key syntax.
+ * @fixed compileColumn() — onUpdateCurrentTimestamp() is now emitted as an
+ *        inline keyword (`ON UPDATE CURRENT_TIMESTAMP`) instead of baking
+ *        a raw string into the default value.
+ *
+ * @added compileModifyColumn() — MySQL MODIFY COLUMN syntax.
+ * @added compileRenameColumn() — MySQL RENAME COLUMN syntax (8.0+).
  */
 final class MySQLGrammar extends AbstractGrammar
 {
     protected string $quoteChar = '`';
 
-    public function compileCreateMigrationTable(string $tableName): string
+    /**
+     * MySQL compileColumn with proper ON UPDATE CURRENT_TIMESTAMP support.
+     */
+    protected function compileColumn(ColumnDefinition $col): string
     {
-        $t = $this->quoteIdentifier($tableName);
+        $parts = [
+            $this->quoteIdentifier($col->getName()),
+            $col->getType(),
+        ];
 
-        return "CREATE TABLE IF NOT EXISTS {$t} (
-    `id`         INT UNSIGNED NOT NULL AUTO_INCREMENT,
-    `migration`  VARCHAR(255) NOT NULL,
-    `batch`      INT UNSIGNED NOT NULL DEFAULT 1,
-    `applied_at` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (`id`),
-    UNIQUE KEY `uq_migration` (`migration`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci";
+        if ($col->isUnsigned()) {
+            $parts[] = 'UNSIGNED';
+        }
+
+        $parts[] = $col->isNullable() ? 'NULL' : 'NOT NULL';
+
+        if ($col->hasDefault()) {
+            $parts[] = 'DEFAULT ' . $this->wrapDefault($col->getDefault());
+        }
+
+        // Emit ON UPDATE CURRENT_TIMESTAMP inline for MySQL — this is where it belongs.
+        if ($col->hasOnUpdateCurrentTimestamp()) {
+            $parts[] = 'ON UPDATE CURRENT_TIMESTAMP';
+        }
+
+        if ($col->isAutoIncrement()) {
+            $parts[] = $this->autoIncrementKeyword();
+        }
+
+        if ($col->getComment() !== '') {
+            $parts[] = "COMMENT '" . addslashes($col->getComment()) . "'";
+        }
+
+        if ($col->getAfter() !== null) {
+            $parts[] = 'AFTER ' . $this->quoteIdentifier($col->getAfter());
+        }
+
+        return implode(' ', array_filter($parts));
     }
 
-    public function compileForeignKeyChecksOff(): string
+    /**
+     * MySQL MODIFY COLUMN syntax.
+     */
+    protected function compileModifyColumn(string $quotedTable, ColumnDefinition $col): string
     {
-        return 'SET FOREIGN_KEY_CHECKS = 0';
+        return "ALTER TABLE {$quotedTable} MODIFY COLUMN " . $this->compileColumn($col);
     }
 
-    public function compileForeignKeyChecksOn(): string
+    /**
+     * MySQL RENAME COLUMN syntax (requires MySQL 8.0+ / MariaDB 10.5.2+).
+     */
+    protected function compileRenameColumn(string $quotedTable, string $from, string $to): string
     {
-        return 'SET FOREIGN_KEY_CHECKS = 1';
+        return "ALTER TABLE {$quotedTable} RENAME COLUMN "
+            . $this->quoteIdentifier($from)
+            . ' TO '
+            . $this->quoteIdentifier($to);
     }
 
-    protected function compileTableOptions(Blueprint $blueprint): string
+    protected function autoIncrementKeyword(): string
     {
-        return sprintf(
-            ' ENGINE=%s DEFAULT CHARSET=%s COLLATE=%s',
-            $blueprint->getEngine(),
-            $blueprint->getCharset(),
-            $blueprint->getCollation(),
-        );
-    }
-
-    protected function compileDropIndex(string $quotedTable, string $indexName): string
-    {
-        return "ALTER TABLE {$quotedTable} DROP INDEX `{$indexName}`";
-    }
-
-    protected function compileDropForeignKey(string $quotedTable, string $fkName): string
-    {
-        return "ALTER TABLE {$quotedTable} DROP FOREIGN KEY `{$fkName}`";
+        return 'AUTO_INCREMENT';
     }
 }

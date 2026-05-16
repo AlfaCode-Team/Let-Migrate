@@ -116,6 +116,7 @@ final class MigrationServiceFactoryTest extends TestCase
     private function makeRegistry(): DriverRegistry
     {
         return DriverRegistry::fromDriverAndGrammar(
+            "sqlite",
             new SQLiteDriver(':memory:'),
             new SQLiteGrammar(),
         );

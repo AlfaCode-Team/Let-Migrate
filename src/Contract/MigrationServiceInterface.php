@@ -7,62 +7,87 @@ namespace AlfaCode\LetMigrate\Contract;
 use AlfaCode\LetMigrate\MigrationResult;
 
 /**
- * The public-facing service contract for all migration operations.
+ * The only public contract for all migration operations.
  *
- * This is the ONLY interface external code (commands, controllers, CLI tools)
- * should depend on. The concrete implementation (MigrationService) is the
- * single authorised holder of a MigrationRepositoryInterface reference —
- * nothing else in the application may access the repository directly.
+ * External code (CLI commands, framework adapters, application code) must
+ * depend ONLY on this interface — never on MigrationService or MigrationRunner.
  *
- * Dependency graph enforced by this layer:
- *
- *   External Code
- *       ↓  (depends only on this interface)
- *   MigrationServiceInterface
- *       ↓  (single concrete implementation)
- *   MigrationService  ← sole repository owner
- *       ↓
- *   MigrationRepositoryInterface  (private, sealed inside service)
+ * @updated Added baseline() — mark all pending migrations as applied without running them.
+ * @updated Added captureSql() — run named migrations against CaptureDriver and return SQL.
  */
 interface MigrationServiceInterface
 {
     /**
-     * Apply all pending migrations.
+     * Apply all pending migrations in lexicographic order.
+     * Each migration runs in its own transaction (when transactional=true).
      */
     public function run(): MigrationResult;
 
     /**
-     * Reverse the last N batches.
+     * Roll back the last N batches in reverse order.
      */
     public function rollback(int $steps = 1): MigrationResult;
 
     /**
-     * Roll back ALL applied migrations (destructive — dev / test only).
+     * Roll back every applied migration.
      */
     public function reset(): MigrationResult;
 
     /**
-     * Reset then re-run all migrations (destructive — dev / test only).
+     * Roll back everything then re-apply all migrations.
      */
     public function refresh(): MigrationResult;
 
     /**
-     * Return status of every discovered migration.
+     * Mark all currently pending migration files as applied without executing
+     * any up() method. Inserts tracking records in a single new batch.
+     *
+     * Use this when bringing an existing database under migration control:
+     * the schema already matches what the migration files would create.
+     *
+     * The returned MigrationResult has $applied = list of baselined filenames
+     * and $batch = the new batch number.
+     */
+    public function baseline(): MigrationResult;
+
+    /**
+     * Run the given migration filenames through a CaptureDriver — all DDL is
+     * intercepted and buffered without touching the database.
+     *
+     * Returns [$capturedSqlStatements, $migratedFilenames]:
+     *   - $capturedSqlStatements — string[] each SQL statement executed by up()
+     *   - $migratedFilenames     — string[] the filenames that were processed
+     *
+     * Used by migrate:squash to collect SQL before writing the squash file.
+     *
+     * @param  string[] $filenames  bare filenames (without .php extension) to process
+     * @return array{string[], string[]}
+     */
+    public function captureSql(array $filenames): array;
+
+    /**
+     * Return the run/pending status of every discovered migration.
      *
      * @return array<string, array{status: string, batch: int|null}>
      */
     public function status(): array;
 
     /**
-     * Return migrations not yet applied.
+     * Return all unapplied MigrationInterface instances, keyed by filename.
      *
      * @return array<string, MigrationInterface>
      */
     public function pending(): array;
 
     /**
-     * Expose the event dispatcher so callers can register lifecycle listeners
-     * without needing a reference to the runner or repository.
+     * Return the configured migration file paths.
+     *
+     * @return string[]
+     */
+    public function paths(): array;
+
+    /**
+     * Return the event dispatcher so CLI commands can wire progress callbacks.
      */
     public function events(): \AlfaCode\LetMigrate\Event\MigrationEventDispatcher;
 }

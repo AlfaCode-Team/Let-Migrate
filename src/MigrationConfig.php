@@ -5,57 +5,83 @@ declare(strict_types=1);
 namespace AlfaCode\LetMigrate;
 
 /**
- * Typed, immutable configuration for the LetMigrate engine.
+ * Immutable value object holding all configuration for Let-Migrate.
  *
- * All values are validated at construction time so errors surface
- * immediately rather than at migration-run time.
+ * @updated Added $seedersPath and $seedersTable properties so the seeder
+ *          engine reads from config instead of hard-coding paths/table names
+ *          in the SeederRunner constructor.
  */
 final class MigrationConfig
 {
-    /**
-     * @param string[] $paths         Absolute paths to migration directories.
-     * @param string   $trackingTable Name of the DB table that records applied migrations.
-     * @param bool     $pretend       When true, SQL is logged but never executed.
-     * @param bool     $transactional Wrap each migration in its own transaction (default: true).
-     */
     public function __construct(
+        /** Database driver key: mysql|pgsql|sqlite|sqlsrv */
+        public readonly string $driver,
+ 
+        /** Absolute paths to directories containing migration files. */
         public readonly array  $paths,
+ 
+        /** Name of the migrations tracking table. */
         public readonly string $trackingTable = 'let_migrations',
+ 
+        /** When true, SQL is logged but never executed (dry-run mode). */
         public readonly bool   $pretend = false,
+ 
+        /** When true, each migration runs inside its own BEGIN/COMMIT block. */
         public readonly bool   $transactional = true,
-    ) {
-        if (empty($this->paths)) {
-            throw new \InvalidArgumentException(
-                'MigrationConfig: at least one migration path is required.',
-            );
-        }
-    }
-
+ 
+        /**
+         * Absolute path to the directory containing seeder files.
+         * When null, seeding is disabled (no seed commands will run).
+         */
+        public readonly string|null $seedersPath = null,
+ 
+        /**
+         * Name of the seeders tracking table.
+         * Defaults to 'let_seeders'.
+         */
+        public readonly string $seedersTable = 'let_seeders',
+    ) {}
+ 
     /**
-     * Build from a flat config array (same array passed to LetMigrate::configure()).
+     * Build from a flat configuration array (the format accepted by LetMigrate::configure()).
      *
-     * Recognised keys:
-     *   paths          string[]  migration directories (required — or use 'path' for single)
-     *   path           string    single migration directory (alias for paths)
-     *   tracking_table string    override tracking table name
-     *   pretend        bool      dry-run mode
-     *   transactional  bool      per-migration transaction wrapping
-     *
-     * @param array<string, mixed> $raw
+     * @param array<string, mixed> $config
      */
-    public static function fromArray(array $raw): self
+    public static function fromArray(array $config): self
     {
-        $paths = (array) ($raw['paths'] ?? []);
-
-        if (empty($paths) && isset($raw['path'])) {
-            $paths = [(string) $raw['path']];
+        // Normalise 'path' (singular) → 'paths' (array)
+        $paths = $config['paths'] ?? [];
+        if (isset($config['path']) && is_string($config['path'])) {
+            $paths = [$config['path']];
         }
-
+ 
         return new self(
-            paths: $paths,
-            trackingTable: (string) ($raw['tracking_table'] ?? 'let_migrations'),
-            pretend: (bool) ($raw['pretend'] ?? false),
-            transactional: (bool) ($raw['transactional'] ?? true),
+            driver:        strtolower((string) ($config['driver']          ?? 'mysql')),
+            paths:         (array)  $paths,
+            trackingTable: (string) ($config['tracking_table']             ?? 'let_migrations'),
+            pretend:       (bool)   ($config['pretend']                    ?? false),
+            transactional: (bool)   ($config['transactional']              ?? true),
+            seedersPath:   isset($config['seeders_path'])
+                               ? (string) $config['seeders_path']
+                               : null,
+            seedersTable:  (string) ($config['seeders_table']              ?? 'let_seeders'),
         );
     }
+ 
+    /**
+     * Return true when at least one migration path is configured.
+     */
+    public function hasPaths(): bool
+    {
+        return !empty($this->paths);
+    }
+ 
+    /**
+     * Return true when a seeders path is configured.
+     */
+    public function hasSeederPath(): bool
+    {
+        return $this->seedersPath !== null && $this->seedersPath !== '';
+    }
 }
+ 

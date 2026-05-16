@@ -6,6 +6,7 @@ namespace AlfaCode\LetMigrate;
 
 use AlfaCode\LetMigrate\Contract\MigrationInterface;
 use AlfaCode\LetMigrate\Contract\MigrationServiceInterface;
+use AlfaCode\LetMigrate\Contract\SchemaInspectorInterface;
 use AlfaCode\LetMigrate\Event\MigrationEventDispatcher;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -179,7 +180,28 @@ final class LetMigrate
     {
         return $this->registry;
     }
-
+     // ── Schema inspection ─────────────────────────────────────────
+ 
+    /**
+     * Return the SchemaInspectorInterface for the currently active driver.
+     *
+     * The inspector is resolved through DriverRegistry::makeInspector(), which
+     * returns the correct implementation for the configured driver:
+     *   mysql/mariadb  → MySQLSchemaInspector
+     *   pgsql          → PostgreSQLSchemaInspector
+     *   sqlite         → SQLiteSchemaInspector
+     *   sqlsrv         → SQLServerSchemaInspector
+     *
+     * Usage:
+     *   $engine->inspect()->getTables();
+     *   $engine->inspect()->getColumns('users');
+     *   $engine->inspect()->tableExists('orders');
+     */
+    public function inspect(): SchemaInspectorInterface
+    {
+        return $this->registry->makeInspector();
+    }
+  // ── Service accessor (for framework adapters) ─────────────────
     /**
      * Access the underlying service for advanced use.
      * Prefer the methods above for standard application code.
