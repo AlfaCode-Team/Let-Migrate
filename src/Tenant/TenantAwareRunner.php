@@ -6,10 +6,10 @@ namespace AlfaCode\LetMigrate\Tenant;
 
 use AlfaCode\LetMigrate\Contract\TenantResolverInterface;
 use AlfaCode\LetMigrate\Exception\LetMigrateException;
-use AlfaCode\LetMigrate\Migration\MigrationResult;
-use AlfaCode\LetMigrate\Registry\DriverRegistry;
-use AlfaCode\LetMigrate\Service\MigrationServiceFactory;
-use AlfaCode\LetMigrate\Config\MigrationConfig;
+use AlfaCode\LetMigrate\MigrationResult;
+use AlfaCode\LetMigrate\DriverRegistry;
+use AlfaCode\LetMigrate\MigrationServiceFactory;
+use AlfaCode\LetMigrate\MigrationConfig;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
@@ -78,7 +78,7 @@ final class TenantAwareRunner
     /**
      * Run migrations for every tenant in sequence.
      *
-     * @return array<string, MigrationResult> tenantId => result
+     * @return array<string, \AlfaCode\LetMigrate\MigrationResult> tenantId => result
      */
     public function runForAllTenants(): array
     {

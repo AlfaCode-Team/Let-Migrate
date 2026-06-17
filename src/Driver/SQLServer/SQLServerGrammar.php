@@ -7,6 +7,7 @@ namespace AlfaCode\LetMigrate\Driver\SQLServer;
 use AlfaCode\LetMigrate\Schema\AbstractGrammar;
 use AlfaCode\LetMigrate\Schema\Blueprint;
 use AlfaCode\LetMigrate\Schema\ColumnDefinition;
+use AlfaCode\LetMigrate\Schema\IndexDefinition;
 
 /**
  * SQL Server DDL grammar.
@@ -218,6 +219,7 @@ CREATE TABLE {$t} (
             str_starts_with($upper, 'DATE')                        => 'DATE',
             str_starts_with($upper, 'TIME')                        => 'TIME',
             str_starts_with($upper, 'YEAR')                        => 'SMALLINT',
+            str_starts_with($upper, 'SET')                         => 'NVARCHAR(255)',
             default                                                => $type,
         };
     }

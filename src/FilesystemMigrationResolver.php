@@ -18,15 +18,32 @@ use AlfaCode\LetMigrate\Exception\MigrationException;
  *   declare a class whose name maps to the studly-cased filename.
  * • Files are sorted lexicographically so the timestamp prefix enforces order.
  * • Multiple paths are supported and merged before sorting.
+ *
+ * ────────────────────────────────────────────────────────────────────
+ * FIX SUMMARY (M-04 / M-05)
+ * ────────────────────────────────────────────────────────────────────
+ * • resolveAll(): explicit alias of resolve() to satisfy the updated
+ *   MigrationResolverInterface and any caller using the old name.
+ * • resolveNames(): returns a filename-filtered subset of resolve(),
+ *   preserving sort order.
  */
 final class FilesystemMigrationResolver implements MigrationResolverInterface
 {
     /** @var string[] */
     private array $paths = [];
 
-    /** @param string[] $paths */
-    public function __construct(array $paths = [])
-    {
+    private readonly \AlfaCode\LetMigrate\Contract\MigrationFactoryInterface $factory;
+
+    /**
+     * @param string[] $paths
+     */
+    public function __construct(
+        array $paths = [],
+        \AlfaCode\LetMigrate\Contract\MigrationFactoryInterface|null $factory = null,
+    ) {
+        $this->factory = $factory
+            ?? new \AlfaCode\LetMigrate\DefaultMigrationFactory();
+
         foreach ($paths as $path) {
             $this->addPath($path);
         }
@@ -64,6 +81,32 @@ final class FilesystemMigrationResolver implements MigrationResolverInterface
         }
 
         return $migrations;
+    }
+
+    /**
+     * M-04: explicit alias of resolve().
+     *
+     * @return array<string, MigrationInterface>
+     */
+    public function resolveAll(): array
+    {
+        return $this->resolve();
+    }
+
+    /**
+     * M-05: resolve only the named migrations (by filename key),
+     * preserving sort order.
+     *
+     * @param  string[]                          $filenames
+     * @return array<string, MigrationInterface>
+     */
+    public function resolveNames(array $filenames): array
+    {
+        return array_filter(
+            $this->resolve(),
+            static fn(string $k): bool => in_array($k, $filenames, true),
+            ARRAY_FILTER_USE_KEY,
+        );
     }
 
     // ── Private helpers ───────────────────────────────────────────
@@ -113,7 +156,7 @@ final class FilesystemMigrationResolver implements MigrationResolverInterface
     {
         $before = get_declared_classes();
         $result = require $filePath;
-        $after = get_declared_classes();
+        $after  = get_declared_classes();
 
         if ($result instanceof MigrationInterface) {
             return $result;
@@ -121,7 +164,7 @@ final class FilesystemMigrationResolver implements MigrationResolverInterface
 
         if ($result !== null && !is_object($result)) {
             throw new MigrationException(
-                "Migration file '{$filePath}' must return an object implementing MigrationInterface or null."
+                "Migration file '{$filePath}' must return an object implementing MigrationInterface or null.",
             );
         }
 
@@ -131,14 +174,15 @@ final class FilesystemMigrationResolver implements MigrationResolverInterface
             $ref = new \ReflectionClass($class);
 
             if ($ref->isInstantiable() && $ref->implementsInterface(MigrationInterface::class)) {
-                /** @var MigrationInterface $obj */
-                $obj = $ref->newInstance();
-                return $obj;
+                // Phase 3: route construction through the factory so a
+                // container-backed factory can inject services into
+                // data-backfill migrations. Default factory == new $class().
+                return $this->factory->make($class);
             }
         }
 
         throw new MigrationException(
-            "Migration file '{$filePath}' did not define a class implementing MigrationInterface."
+            "Migration file '{$filePath}' did not define a class implementing MigrationInterface.",
         );
     }
 }

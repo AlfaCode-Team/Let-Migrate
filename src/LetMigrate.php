@@ -56,10 +56,23 @@ final class LetMigrate
 
     private function __construct(
         private readonly DriverRegistry $registry,
-        MigrationServiceInterface       $service,
+        MigrationServiceInterface $service,
     ) {
         $this->service = $service;
     }
+
+    public function generator(): \AlfaCode\LetMigrate\MigrationGenerator
+    {
+        return new \AlfaCode\LetMigrate\MigrationGenerator(
+            $this->inspect(),
+        );
+    }
+    public function snapshot(): array
+{
+    return \AlfaCode\LetMigrate\SchemaSnapshot::capture(
+        $this->inspect(),
+    );
+}
 
     // ── Factory methods ───────────────────────────────────────────
 
@@ -76,7 +89,7 @@ final class LetMigrate
      * @param array<string, mixed> $config
      */
     public static function configure(
-        array           $config,
+        array $config,
         LoggerInterface $logger = new NullLogger(),
     ): self {
         $registry = DriverRegistry::fromConfig($config);
@@ -102,8 +115,8 @@ final class LetMigrate
      * @param array<string, mixed> $config
      */
     public static function fromRegistry(
-        DriverRegistry  $registry,
-        array           $config = [],
+        DriverRegistry $registry,
+        array $config = [],
         LoggerInterface $logger = new NullLogger(),
     ): self {
         $service = MigrationServiceFactory::create(
@@ -180,8 +193,8 @@ final class LetMigrate
     {
         return $this->registry;
     }
-     // ── Schema inspection ─────────────────────────────────────────
- 
+    // ── Schema inspection ─────────────────────────────────────────
+
     /**
      * Return the SchemaInspectorInterface for the currently active driver.
      *
@@ -201,7 +214,7 @@ final class LetMigrate
     {
         return $this->registry->makeInspector();
     }
-  // ── Service accessor (for framework adapters) ─────────────────
+    // ── Service accessor (for framework adapters) ─────────────────
     /**
      * Access the underlying service for advanced use.
      * Prefer the methods above for standard application code.

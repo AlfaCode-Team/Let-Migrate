@@ -25,31 +25,17 @@ use AlfaCode\LetMigrate\Schema\SchemaBuilder;
 /**
  * Central registry that resolves database drivers and grammars by name.
  *
- * Supports built-in drivers (mysql, pgsql, sqlite, sqlsrv) and custom
- * drivers registered at runtime via extendDriver() / extendGrammar().
- *
- * Usage
- * ─────
- *   // From a config array
- *   $registry = DriverRegistry::fromConfig([
- *       'driver'   => 'mysql',
- *       'host'     => '127.0.0.1',
- *       'port'     => 3306,
- *       'database' => 'my_app',
- *       'username' => 'root',
- *       'password' => 'secret',
- *   ]);
- *
- *   // Pre-built driver + grammar pair (useful in tests)
- *   $registry = DriverRegistry::fromDriverAndGrammar($driver, $grammar);
- *
- *   // Register a custom driver
- *   DriverRegistry::extendDriver('mydb', fn($cfg) => new MyDriver($cfg));
- * 
- *   @updated makeInspector() — resolves the correct SchemaInspectorInterface
- *          implementation for the active driver and returns it. Called by
- *          LetMigrate::inspect() and by SchemaBuilder when one is needed.
- *
+ * ────────────────────────────────────────────────────────────────────
+ * FIX SUMMARY
+ * ────────────────────────────────────────────────────────────────────
+ * • U-04: the constructor now stores the raw $config array. Previously
+ *         makeInspector() read $this->config which was never declared,
+ *         causing a fatal "Undefined property" on PostgreSQL / SQL Server
+ *         and whenever fromDriverAndGrammar() was used.
+ * • U-05: schemaBuilder() now wires makeInspector() into SchemaBuilder so
+ *         hasTable()/hasColumn() use the richer inspector. makeInspector()
+ *         is wrapped so a driver without an inspector does not break the
+ *         builder (null is passed instead).
  */
 final class DriverRegistry
 {
@@ -59,10 +45,14 @@ final class DriverRegistry
     /** @var array<string, callable(array<string,mixed>): GrammarInterface> */
     private static array $customGrammars = [];
 
+    /**
+     * @param array<string, mixed> $config  raw connection config (U-04)
+     */
     private function __construct(
-        private readonly string $driverKey,
-        private readonly DatabaseDriverInterface $driver,
-        private readonly GrammarInterface $grammar,
+        private readonly string                  $driverKey,
+        private readonly DatabaseDriverInterface  $driver,
+        private readonly GrammarInterface         $grammar,
+        private readonly array                    $config = [],
     ) {
     }
 
@@ -89,19 +79,24 @@ final class DriverRegistry
             $driverName,
             self::resolveDriver($driverName, $config),
             self::resolveGrammar($driverName, $config),
+            $config,
         );
     }
 
     /**
      * Build from a pre-constructed driver + grammar pair.
      * Useful in tests and when you manage the connection lifecycle yourself.
+     *
+     * @param array<string, mixed> $config  optional — lets makeInspector()
+     *                                       read a 'schema' key in tests
      */
     public static function fromDriverAndGrammar(
-        string $driverKey,
+        string                  $driverKey,
         DatabaseDriverInterface $driver,
-        GrammarInterface $grammar,
+        GrammarInterface        $grammar,
+        array                   $config = [],
     ): self {
-        return new self($driverKey, $driver, $grammar);
+        return new self($driverKey, $driver, $grammar, $config);
     }
 
     // ── Extension points ──────────────────────────────────────────
@@ -137,35 +132,34 @@ final class DriverRegistry
     {
         return $this->grammar;
     }
+
     /**
      * Resolve the correct SchemaInspectorInterface for the active driver.
      *
      * Mapping:
      *   mysql / mariadb  → MySQLSchemaInspector
-     *   pgsql            → PostgreSQLSchemaInspector (schema from config['schema'] ?? 'public')
+     *   pgsql            → PostgreSQLSchemaInspector (config['schema'] ?? 'public')
      *   sqlite           → SQLiteSchemaInspector
-     *   sqlsrv           → SQLServerSchemaInspector (schema from config['schema'] ?? 'dbo')
-     *
-     * Called by LetMigrate::inspect() and SchemaBuilder when an inspector is needed.
+     *   sqlsrv           → SQLServerSchemaInspector (config['schema'] ?? 'dbo')
      */
     public function makeInspector(): SchemaInspectorInterface
     {
         $driver = $this->driver();
-        $key = $this->driverKey;
+        $key    = $this->driverKey;
         $schema = (string) ($this->config['schema'] ?? '');
 
         return match ($key) {
             'mysql', 'mariadb' =>
-            new MySQLSchemaInspector($driver),
+                new MySQLSchemaInspector($driver),
 
-            'pgsql', 'postgresql' =>
-            new PostgreSQLSchemaInspector($driver, $schema !== '' ? $schema : 'public'),
+            'pgsql', 'postgres', 'postgresql' =>
+                new PostgreSQLSchemaInspector($driver, $schema !== '' ? $schema : 'public'),
 
             'sqlite' =>
-            new SQLiteSchemaInspector($driver),
+                new SQLiteSchemaInspector($driver),
 
             'sqlsrv', 'sqlserver', 'mssql' =>
-            new SQLServerSchemaInspector($driver, $schema !== '' ? $schema : 'dbo'),
+                new SQLServerSchemaInspector($driver, $schema !== '' ? $schema : 'dbo'),
 
             default => throw new LetMigrateException(
                 "No SchemaInspector available for driver '{$key}'.",
@@ -174,12 +168,22 @@ final class DriverRegistry
     }
 
     /**
-     * Create a new SchemaBuilder wired to this registry's driver + grammar.
-     * Returns a fresh instance on every call.
+     * Create a new SchemaBuilder wired to this registry's driver + grammar
+     * AND the matching schema inspector (U-05). Returns a fresh instance on
+     * every call. If the driver has no inspector, null is passed so the
+     * builder still works (falling back to raw driver queries).
      */
     public function schemaBuilder(): SchemaBuilder
     {
-        return new SchemaBuilder($this->driver, $this->grammar);
+        try {
+            $inspector = $this->makeInspector();
+        } catch (LetMigrateException) {
+            $inspector = null;
+        }
+
+        $prefix = (string) ($this->config['prefix'] ?? '');
+
+        return new SchemaBuilder($this->driver, $this->grammar, $inspector, $prefix);
     }
 
     // ── Supported driver names ────────────────────────────────────
@@ -204,21 +208,21 @@ final class DriverRegistry
 
         return match ($name) {
             'mysql', 'mariadb' => new MySQLDriver(
-                host: (string) ($config['host'] ?? '127.0.0.1'),
-                port: (int) ($config['port'] ?? 3306),
+                host:     (string) ($config['host']     ?? '127.0.0.1'),
+                port:     (int)    ($config['port']     ?? 3306),
                 database: (string) ($config['database'] ?? ''),
                 username: (string) ($config['username'] ?? 'root'),
                 password: (string) ($config['password'] ?? ''),
-                charset: (string) ($config['charset'] ?? 'utf8mb4'),
+                charset:  (string) ($config['charset']  ?? 'utf8mb4'),
             ),
 
             'pgsql', 'postgres', 'postgresql' => new PostgreSQLDriver(
-                host: (string) ($config['host'] ?? '127.0.0.1'),
-                port: (int) ($config['port'] ?? 5432),
+                host:     (string) ($config['host']     ?? '127.0.0.1'),
+                port:     (int)    ($config['port']     ?? 5432),
                 database: (string) ($config['database'] ?? ''),
                 username: (string) ($config['username'] ?? 'postgres'),
                 password: (string) ($config['password'] ?? ''),
-                schema: (string) ($config['schema'] ?? 'public'),
+                schema:   (string) ($config['schema']   ?? 'public'),
             ),
 
             'sqlite' => new SQLiteDriver(
@@ -226,12 +230,12 @@ final class DriverRegistry
             ),
 
             'sqlsrv', 'sqlserver', 'mssql' => new SQLServerDriver(
-                host: (string) ($config['host'] ?? '127.0.0.1'),
-                port: (int) ($config['port'] ?? 1433),
+                host:     (string) ($config['host']     ?? '127.0.0.1'),
+                port:     (int)    ($config['port']     ?? 1433),
                 database: (string) ($config['database'] ?? ''),
                 username: (string) ($config['username'] ?? 'sa'),
                 password: (string) ($config['password'] ?? ''),
-                schema: (string) ($config['schema'] ?? 'dbo'),
+                schema:   (string) ($config['schema']   ?? 'dbo'),
             ),
 
             default => throw new LetMigrateException(
@@ -249,11 +253,11 @@ final class DriverRegistry
         }
 
         return match ($name) {
-            'mysql', 'mariadb' => new MySQLGrammar(),
-            'pgsql', 'postgres', 'postgresql' => new PostgreSQLGrammar(),
-            'sqlite' => new SQLiteGrammar(),
-            'sqlsrv', 'sqlserver', 'mssql' => new SQLServerGrammar(),
-            default => new MySQLGrammar(),
+            'mysql', 'mariadb'                  => new MySQLGrammar(),
+            'pgsql', 'postgres', 'postgresql'   => new PostgreSQLGrammar(),
+            'sqlite'                            => new SQLiteGrammar(),
+            'sqlsrv', 'sqlserver', 'mssql'      => new SQLServerGrammar(),
+            default                             => new MySQLGrammar(),
         };
     }
 }

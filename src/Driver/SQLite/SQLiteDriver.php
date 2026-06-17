@@ -58,7 +58,11 @@ final class SQLiteDriver extends AbstractPdoDriver
 
     public function listTables(): array
     {
-        $rows = $this->fetchAll("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name");
+        // Exclude SQLite's internal tables (e.g. sqlite_sequence) — they are
+        // managed by the engine and cannot be dropped.
+        $rows = $this->fetchAll(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        );
 
         return array_column($rows, 'name');
     }

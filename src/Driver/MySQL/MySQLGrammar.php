@@ -22,6 +22,7 @@ final class MySQLGrammar extends AbstractGrammar
 {
     protected string $quoteChar = '`';
 
+
     /**
      * MySQL compileColumn with proper ON UPDATE CURRENT_TIMESTAMP support.
      */

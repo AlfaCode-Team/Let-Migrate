@@ -7,6 +7,7 @@ namespace AlfaCode\LetMigrate\Driver\PostgreSQL;
 use AlfaCode\LetMigrate\Schema\AbstractGrammar;
 use AlfaCode\LetMigrate\Schema\Blueprint;
 use AlfaCode\LetMigrate\Schema\ColumnDefinition;
+use AlfaCode\LetMigrate\Schema\IndexDefinition;
 
 /**
  * PostgreSQL DDL grammar.
@@ -30,6 +31,7 @@ final class PostgreSQLGrammar extends AbstractGrammar
 {
     protected string $quoteChar = '"';
 
+    protected bool $supportsDeferrable = true;
     public function compileDropIfExists(string $table): string
     {
         return "DROP TABLE IF EXISTS {$this->quoteIdentifier($table)} CASCADE";
@@ -77,17 +79,17 @@ final class PostgreSQLGrammar extends AbstractGrammar
     public function compilePostCreate(Blueprint $blueprint): array
     {
         $statements = [];
-        $table      = $blueprint->getTable();
+        $table = $blueprint->getTable();
 
         foreach ($blueprint->getColumns() as $col) {
             if (!$col->hasOnUpdateCurrentTimestamp()) {
                 continue;
             }
 
-            $colName  = $col->getName();
-            $fnName   = $this->quoteIdentifier("set_{$table}_{$colName}_updated");
-            $trgName  = $this->quoteIdentifier("trg_{$table}_{$colName}_updated");
-            $tbl      = $this->quoteIdentifier($table);
+            $colName = $col->getName();
+            $fnName = $this->quoteIdentifier("set_{$table}_{$colName}_updated");
+            $trgName = $this->quoteIdentifier("trg_{$table}_{$colName}_updated");
+            $tbl = $this->quoteIdentifier($table);
             $quotedCol = $this->quoteIdentifier($colName);
 
             $statements[] = <<<SQL
@@ -153,7 +155,7 @@ final class PostgreSQLGrammar extends AbstractGrammar
      */
     protected function compileModifyColumn(string $quotedTable, ColumnDefinition $col): string
     {
-        $qcol    = $this->quoteIdentifier($col->getName());
+        $qcol = $this->quoteIdentifier($col->getName());
         $newType = $this->mapType($col->getType());
         $clauses = [];
 
@@ -227,14 +229,44 @@ final class PostgreSQLGrammar extends AbstractGrammar
     public function compileIndexStatements(Blueprint $blueprint): array
     {
         $table = $this->quoteIdentifier($blueprint->getTable());
-        $out   = [];
+        $out = [];
 
         foreach ($blueprint->getIndexes() as $idx) {
-            if ($idx->getType() === 'index') {
-                $cols = implode(', ', array_map([$this, 'quoteIdentifier'], $idx->getColumns()));
-                $name = $this->quoteIdentifier($idx->getName());
-                $out[] = "CREATE INDEX {$name} ON {$table} ({$cols})";
+            $type = $idx->getType();
+            if ($type !== 'index' && $type !== 'fulltext') {
+                continue;
             }
+
+            $name = $this->quoteIdentifier($idx->getName());
+            $concurrent = $idx->isConcurrent() ? 'CONCURRENTLY ' : '';
+            $using = $idx->getUsing();
+            $expr = $idx->getExpression();
+            $where = $idx->getWhere();
+
+            // FULLTEXT → GIN(to_tsvector(...)) (Phase 1 behaviour preserved)
+            if ($type === 'fulltext') {
+                $exprCols = implode(" || ' ' || ", array_map(
+                    fn($c) => "coalesce(" . $this->quoteIdentifier($c) . ",'')",
+                    $idx->getColumns(),
+                ));
+                $out[] = "CREATE INDEX {$concurrent}{$name} ON {$table} "
+                    . "USING GIN (to_tsvector('simple', {$exprCols}))";
+                continue;
+            }
+
+            // Target: expression index OR column list
+            if ($expr !== '') {
+                $target = "({$expr})";
+            } else {
+                $cols = implode(', ', array_map([$this, 'quoteIdentifier'], $idx->getColumns()));
+                $target = "({$cols})";
+            }
+
+            $usingClause = $using !== '' ? " USING {$using}" : '';
+            $whereClause = $where !== '' ? " WHERE {$where}" : '';
+
+            $out[] = "CREATE INDEX {$concurrent}{$name} ON {$table}"
+                . $usingClause . ' ' . $target . $whereClause;
         }
 
         return $out;
@@ -246,9 +278,10 @@ final class PostgreSQLGrammar extends AbstractGrammar
         $name = $this->quoteIdentifier($idx->getName());
 
         return match ($idx->getType()) {
-            'unique'  => "UNIQUE ({$cols})",
+            'unique' => "UNIQUE ({$cols})",
             'primary' => "PRIMARY KEY ({$cols})",
-            default   => "KEY {$name} ({$cols})",
+            'fulltext' => '',           // handled in compileIndexStatements()
+            default => "KEY {$name} ({$cols})",
         };
     }
 
@@ -257,32 +290,33 @@ final class PostgreSQLGrammar extends AbstractGrammar
         $upper = mb_strtoupper(trim($type));
 
         return match (true) {
-            str_starts_with($upper, 'TINYINT(1)')                  => 'BOOLEAN',
+            str_starts_with($upper, 'TINYINT(1)') => 'BOOLEAN',
             str_starts_with($upper, 'TINYINT'),
-            str_starts_with($upper, 'SMALLINT')                    => 'SMALLINT',
+            str_starts_with($upper, 'SMALLINT') => 'SMALLINT',
             str_starts_with($upper, 'MEDIUMINT'),
-            str_starts_with($upper, 'INT')                         => 'INTEGER',
-            str_starts_with($upper, 'BIGINT')                      => 'BIGINT',
+            str_starts_with($upper, 'INT') => 'INTEGER',
+            str_starts_with($upper, 'BIGINT') => 'BIGINT',
             str_starts_with($upper, 'FLOAT'),
-            str_starts_with($upper, 'DOUBLE')                      => 'DOUBLE PRECISION',
+            str_starts_with($upper, 'DOUBLE') => 'DOUBLE PRECISION',
             str_starts_with($upper, 'DECIMAL'),
-            str_starts_with($upper, 'NUMERIC')                     => $type, // keep precision/scale
+            str_starts_with($upper, 'NUMERIC') => $type, // keep precision/scale
             str_starts_with($upper, 'TINYTEXT'),
             str_starts_with($upper, 'MEDIUMTEXT'),
             str_starts_with($upper, 'LONGTEXT'),
-            str_starts_with($upper, 'TEXT')                        => 'TEXT',
-            str_starts_with($upper, 'CHAR')                        => $type,
-            str_starts_with($upper, 'VARCHAR')                     => $type,
+            str_starts_with($upper, 'TEXT') => 'TEXT',
+            str_starts_with($upper, 'CHAR') => $type,
+            str_starts_with($upper, 'VARCHAR') => $type,
             str_starts_with($upper, 'DATETIME'),
-            str_starts_with($upper, 'TIMESTAMP')                   => 'TIMESTAMP',
-            str_starts_with($upper, 'DATE')                        => 'DATE',
-            str_starts_with($upper, 'TIME')                        => 'TIME',
-            str_starts_with($upper, 'YEAR')                        => 'SMALLINT',
+            str_starts_with($upper, 'TIMESTAMP') => 'TIMESTAMP',
+            str_starts_with($upper, 'DATE') => 'DATE',
+            str_starts_with($upper, 'TIME') => 'TIME',
+            str_starts_with($upper, 'YEAR') => 'SMALLINT',
             str_starts_with($upper, 'BLOB'),
-            str_starts_with($upper, 'BINARY')                      => 'BYTEA',
-            str_starts_with($upper, 'JSON')                        => 'JSONB',
-            str_starts_with($upper, 'ENUM')                        => 'TEXT',
-            default                                                => $type,
+            str_starts_with($upper, 'BINARY') => 'BYTEA',
+            str_starts_with($upper, 'JSON') => 'JSONB',
+            str_starts_with($upper, 'ENUM') => 'TEXT',
+            str_starts_with($upper, 'SET') => 'TEXT',
+            default => $type,
         };
     }
 }

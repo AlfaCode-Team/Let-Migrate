@@ -38,7 +38,7 @@ final class LetMigrateServiceProvider extends ServiceProvider
     public function register(): void
     {
         // Merge package config defaults
-        $this->mergeConfigFrom(__DIR__ . '/config/let-migrate.php', 'let-migrate');
+        $this->mergeConfigFrom(__DIR__ . '/../../../config/let-migrate.php', 'let-migrate');
 
         // Bind LetMigrate engine singleton
         $this->app->singleton(LetMigrate::class, function ($app) {
@@ -89,7 +89,7 @@ final class LetMigrateServiceProvider extends ServiceProvider
         // Publish config
         if ($this->app->runningInConsole()) {
             $this->publishes([
-                __DIR__ . '/config/let-migrate.php' => config_path('let-migrate.php'),
+                __DIR__ . '/../../../config/let-migrate.php' => config_path('let-migrate.php'),
             ], 'let-migrate-config');
 
             // Register Artisan commands
