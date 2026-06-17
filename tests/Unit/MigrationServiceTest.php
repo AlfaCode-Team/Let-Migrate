@@ -161,8 +161,7 @@ final class MigrationServiceTest extends TestCase
         MigrationEventDispatcher|null $events = null,
     ): MigrationService {
         $repository = $this->createStub(MigrationRepositoryInterface::class);
-        $repository->method('ensureTable')
-            ->willReturnCallback(fn() => null);
+        $repository->method('ensureTable')->willReturnCallback(fn() => null);
         $repository->method('lastBatch')->willReturn(0);
         $repository->method('appliedFilenames')->willReturn($applied);
         $repository->method('all')->willReturn([]);
@@ -171,17 +170,37 @@ final class MigrationServiceTest extends TestCase
         $resolver->method('resolve')->willReturn($pending);
 
         $schema = $this->createStub(SchemaBuilderInterface::class);
-
         $driver = $this->createStub(\AlfaCode\LetMigrate\Contract\DatabaseDriverInterface::class);
         $driver->method('beginTransaction')->willReturnCallback(fn() => null);
         $driver->method('commit')->willReturnCallback(fn() => null);
         $schema->method('getDriver')->willReturn($driver);
 
-        return new MigrationService(
+        $events ??= new MigrationEventDispatcher();
+
+        $runner = new \AlfaCode\LetMigrate\MigrationRunner(
             repository: $repository,
             resolver: $resolver,
             schema: $schema,
-            events: $events ?? new MigrationEventDispatcher(),
+            events: $events,
+            transactional: true,
+        );
+
+        // NOTE: MigrationService::captureSql() needs a concrete SchemaBuilder
+        // (getGrammar/getInspector). Tests that don't call captureSql() can
+        // pass a real SchemaBuilder over an in-memory SQLite driver, or skip
+        // captureSql coverage here and cover it in the integration suite.
+        $schemaBuilder = new \AlfaCode\LetMigrate\Schema\SchemaBuilder(
+            $driver,
+            new \AlfaCode\LetMigrate\Driver\SQLite\SQLiteGrammar(),
+        );
+
+        return new MigrationService(
+            runner: $runner,
+            repository: $repository,
+            resolver: $resolver,
+            schemaBuilder: $schemaBuilder,
+            dispatcher: $events,
+            paths: [],
         );
     }
 

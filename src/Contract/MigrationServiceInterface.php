@@ -37,6 +37,11 @@ interface MigrationServiceInterface
      * Roll back everything then re-apply all migrations.
      */
     public function refresh(): MigrationResult;
+    /**
+     * Migrate up or down until the database is exactly at $target.
+     * Up if $target is pending; down (keeping $target) if already applied.
+     */
+    public function migrateTo(string $target): MigrationResult;
 
     /**
      * Mark all currently pending migration files as applied without executing
@@ -68,7 +73,7 @@ interface MigrationServiceInterface
     /**
      * Return the run/pending status of every discovered migration.
      *
-     * @return array<string, array{status: string, batch: int|null}>
+     * @return array<string, array{status: string, batch: int|null, applied_at: string|null}>
      */
     public function status(): array;
 
@@ -85,6 +90,27 @@ interface MigrationServiceInterface
      * @return string[]
      */
     public function paths(): array;
+
+    /**
+     * Roll back the last $steps migrations and re-apply exactly those.
+     */
+    public function redo(int $steps = 1): MigrationResult;
+
+    /**
+     * Drop every table then re-run all migrations from scratch.
+     */
+    public function fresh(): MigrationResult;
+
+    /**
+     * Create the migration tracking table if it does not yet exist.
+     * Idempotent — safe to call on every boot.
+     */
+    public function install(): void;
+
+    /**
+     * Return true when the migration tracking table already exists.
+     */
+    public function isInstalled(): bool;
 
     /**
      * Return the event dispatcher so CLI commands can wire progress callbacks.

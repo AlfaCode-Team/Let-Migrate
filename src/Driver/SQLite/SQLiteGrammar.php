@@ -178,12 +178,7 @@ final class SQLiteGrammar extends AbstractGrammar
         $rawTable = $newBlueprint->getTable();
         $tmpTable = $this->quoteIdentifier("__tmp_{$rawTable}");
 
-        $tmpBlueprint = new \AlfaCode\LetMigrate\Schema\Blueprint("__tmp_{$rawTable}");
-        // Copy all columns from newBlueprint into tmpBlueprint
-        foreach ($newBlueprint->getColumns() as $col) {
-            // Re-add via reflection-free approach: emit the col DDL directly
-        }
-
+        
         $oldCols = implode(', ', array_map([$this, 'quoteIdentifier'], $oldColumnNames));
         $newCols = implode(', ', array_map([$this, 'quoteIdentifier'], $newColumnNames));
 
@@ -257,9 +252,10 @@ final class SQLiteGrammar extends AbstractGrammar
             $parts[] = 'DEFAULT ' . $this->wrapDefault($col->getDefault());
         }
 
-        if ($col->isPrimary() && !$col->isAutoIncrement()) {
-            $parts[] = 'PRIMARY KEY';
-        }
+        // NOTE: a standalone "PRIMARY KEY (col)" clause is emitted by
+        // AbstractGrammar::compileColumns() for non-autoincrement primary
+        // columns. Emitting an inline "PRIMARY KEY" here too would make SQLite
+        // reject the table with "more than one primary key".
 
         if ($col->isUnique()) {
             $parts[] = 'UNIQUE';
@@ -299,6 +295,7 @@ final class SQLiteGrammar extends AbstractGrammar
             str_starts_with($upper, 'YEAR')                        => 'TEXT',
             str_starts_with($upper, 'BLOB'),
             str_starts_with($upper, 'BINARY')                      => 'BLOB',
+             str_starts_with($upper, 'SET')                         => 'TEXT',
             default                                                => 'TEXT',
         };
     }

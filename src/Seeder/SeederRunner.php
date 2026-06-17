@@ -46,11 +46,26 @@ final class SeederRunner
      *
      * @return string[] Names of seeders that were executed.
      */
-    public function run(bool $force = false): array
+    /**
+     * @param bool        $force Re-run seeders even if already recorded.
+     * @param string|null $only  Run only the seeder with this name (file
+     *                           basename, e.g. 'UsersSeeder'); null = all.
+     * @return string[] Names of the seeders that ran.
+     */
+    public function run(bool $force = false, ?string $only = null): array
     {
         $this->repository->ensureTable();
 
-        $all     = $this->resolve();
+        $all = $this->resolve();
+
+        if ($only !== null && $only !== '') {
+            $all = array_filter(
+                $all,
+                static fn(string $k): bool => $k === $only,
+                ARRAY_FILTER_USE_KEY,
+            );
+        }
+
         $ran     = $force ? [] : array_flip($this->repository->ranNames());
         $pending = array_filter($all, static fn($_, string $k) => !isset($ran[$k]), ARRAY_FILTER_USE_BOTH);
 
@@ -158,9 +173,21 @@ final class SeederRunner
                 $name    = basename($file, '.php');
                 $seeder  = require $file;
 
+                // Two supported file styles:
+                //   1. `return new MySeeder();` / `return new class ... {}`
+                //   2. `final class MySeeder implements SeederInterface {}`
+                //      (the make:seeder scaffold) — the class is named after
+                //      the file, so instantiate it when nothing was returned.
+                if (!$seeder instanceof SeederInterface && class_exists($name)) {
+                    $candidate = new $name();
+                    if ($candidate instanceof SeederInterface) {
+                        $seeder = $candidate;
+                    }
+                }
+
                 if (!$seeder instanceof SeederInterface) {
                     throw new LetMigrateException(
-                        "Seeder file '{$file}' must return an instance of SeederInterface.",
+                        "Seeder file '{$file}' must return (or declare) an instance of SeederInterface.",
                     );
                 }
 

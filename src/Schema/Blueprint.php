@@ -54,11 +54,16 @@ final class Blueprint
     /** @var string[] */
     private array $droppedForeignKeys = [];
 
-    private string $engine    = 'InnoDB';
-    private string $charset   = 'utf8mb4';
+    private string $engine = 'InnoDB';
+    private string $charset = 'utf8mb4';
     private string $collation = 'utf8mb4_unicode_ci';
 
-    public function __construct(private readonly string $table) {}
+    private string $algorithm = '';
+    private string $lock = '';
+
+    public function __construct(private readonly string $table)
+    {
+    }
 
     // ── Convenience: auto-incrementing primary key ─────────────────
 
@@ -115,6 +120,55 @@ final class Blueprint
     {
         return $this->addColumn($name, "CHAR({$length})");
     }
+    /**
+     * ULID — 26-char Crockford base32 identifier (sortable UUID alt).
+     */
+    public function ulid(string $name = 'id'): ColumnDefinition
+    {
+        return $this->addColumn($name, 'CHAR(26)');
+    }
+
+    /**
+     * IPv4/IPv6 address. VARCHAR(45) is IPv6-safe and portable across
+     * all four drivers (PostgreSQL INET is not portable to MySQL/SQLite).
+     */
+    public function ipAddress(string $name = 'ip_address'): ColumnDefinition
+    {
+        return $this->addColumn($name, 'VARCHAR(45)');
+    }
+
+    /**
+     * MAC address — VARCHAR(17) ("AA:BB:CC:DD:EE:FF").
+     */
+    public function macAddress(string $name = 'mac_address'): ColumnDefinition
+    {
+        return $this->addColumn($name, 'VARCHAR(17)');
+    }
+
+    /**
+     * Laravel-style remember-me token column.
+     */
+    public function rememberToken(): ColumnDefinition
+    {
+        return $this->addColumn('remember_token', 'VARCHAR(100)')->nullable();
+    }
+
+    /**
+     * MySQL SET column. Non-MySQL grammars map SET(...) to a string type
+     * (see PATCH P1C-4) so this is portable, degrading to a plain
+     * string/text column elsewhere.
+     *
+     * @param string[] $allowed
+     */
+    public function set(string $name, array $allowed): ColumnDefinition
+    {
+        $values = implode(',', array_map(
+            static fn(string $v): string => "'{$v}'",
+            $allowed,
+        ));
+
+        return $this->addColumn($name, "SET({$values})");
+    }
 
     public function string(string $name, int $length = 255): ColumnDefinition
     {
@@ -124,6 +178,20 @@ final class Blueprint
     public function tinyText(string $name): ColumnDefinition
     {
         return $this->addColumn($name, 'TINYTEXT');
+    }
+    /**
+     * Full-text index. MySQL → FULLTEXT KEY; PostgreSQL → GIN on
+     * to_tsvector(...); SQLite / SQL Server → graceful plain-index
+     * fallback (documented; FTS there needs engine-specific setup).
+     *
+     * @param string[] $columns
+     */
+    public function fullText(array $columns, string $name = ''): void
+    {
+        $this->indexes[] = IndexDefinition::fullText(
+            $columns,
+            $name ?: 'ft_' . implode('_', $columns),
+        );
     }
 
     public function text(string $name): ColumnDefinition
@@ -202,6 +270,38 @@ final class Blueprint
         return $this->addColumn($name, 'TINYINT(1)');
     }
 
+    // ── Polymorphic ────────────────────────────────────────────────
+
+    /**
+     * Add `{name}_id` (UNSIGNED BIGINT) + `{name}_type` (VARCHAR) and a
+     * composite index, for polymorphic relations (Laravel parity).
+     */
+    public function morphs(string $name): void
+    {
+        $this->addColumn("{$name}_id", 'BIGINT')->unsigned();
+        $this->addColumn("{$name}_type", 'VARCHAR(255)');
+        $this->index(["{$name}_type", "{$name}_id"], "idx_{$name}");
+    }
+
+    /**
+     * Nullable variant of morphs().
+     */
+    public function nullableMorphs(string $name): void
+    {
+        $this->addColumn("{$name}_id", 'BIGINT')->unsigned()->nullable();
+        $this->addColumn("{$name}_type", 'VARCHAR(255)')->nullable();
+        $this->index(["{$name}_type", "{$name}_id"], "idx_{$name}");
+    }
+
+    /**
+     * UUID-keyed polymorphic columns: `{name}_id` CHAR(36) + `{name}_type`.
+     */
+    public function uuidMorphs(string $name): void
+    {
+        $this->addColumn("{$name}_id", 'CHAR(36)');
+        $this->addColumn("{$name}_type", 'VARCHAR(255)');
+        $this->index(["{$name}_type", "{$name}_id"], "idx_{$name}");
+    }
     // ── JSON / Binary ──────────────────────────────────────────────
 
     public function json(string $name): ColumnDefinition
@@ -214,6 +314,14 @@ final class Blueprint
         return $this->addColumn($name, 'BLOB');
     }
 
+    /**
+     * MEDIUMINT (MySQL). PostgreSQL/SQL Server/SQLite grammars already
+     * map MEDIUMINT → INTEGER/INT.
+     */
+    public function mediumInteger(string $name): ColumnDefinition
+    {
+        return $this->addColumn($name, 'MEDIUMINT');
+    }
     // ── Enum ───────────────────────────────────────────────────────
 
     /** @param string[] $allowed */
@@ -230,33 +338,38 @@ final class Blueprint
     // ── Indexes ────────────────────────────────────────────────────
 
     /** @param string[] $columns */
-    public function primary(array $columns, string $name = ''): void
+    public function primary(array $columns, string $name = ''): IndexDefinition
     {
-        $this->indexes[] = new IndexDefinition(
+        $idx = IndexDefinition::primary(
             $columns,
             $name ?: 'PRIMARY',
-            'primary',
         );
+        $this->indexes[] = $idx;
+        return $idx;
     }
 
     /** @param string[] $columns */
-    public function unique(array $columns, string $name = ''): void
+    public function unique(array $columns, string $name = ''): IndexDefinition
     {
-        $this->indexes[] = new IndexDefinition(
+         $idx = IndexDefinition::unique(
             $columns,
             $name ?: 'uq_' . implode('_', $columns),
-            'unique',
         );
+
+        $this->indexes[] = $idx;
+        return $idx;
     }
 
     /** @param string[] $columns */
-    public function index(array $columns, string $name = ''): void
+    public function index(array $columns, string $name = ''): IndexDefinition
     {
-        $this->indexes[] = new IndexDefinition(
+        $idx = IndexDefinition::index(
             $columns,
             $name ?: 'idx_' . implode('_', $columns),
-            'index',
         );
+
+        $this->indexes[] = $idx;
+        return $idx;
     }
 
     // ── Foreign keys ───────────────────────────────────────────────
@@ -267,6 +380,36 @@ final class Blueprint
         $this->foreignKeys[] = $fk;
 
         return $fk;
+    }
+    /**
+     * Create an UNSIGNED BIGINT column intended to hold a foreign key.
+     *
+     * Chain ->constrained() to add the FK in one expression:
+     *
+     *   $t->foreignId('user_id')->constrained();
+     *   $t->foreignId('author_id')->nullable()->constrained('users')->nullOnDelete();
+     *
+     * Returns a ForeignIdColumnDefinition (proxy). Column modifiers chain
+     * first; constrained() then returns a ForeignKeyDefinition.
+     */
+    public function foreignId(string $name): ForeignIdColumnDefinition
+    {
+        $column = $this->addColumn($name, 'BIGINT')->unsigned();
+
+        return new ForeignIdColumnDefinition($this, $column, $name);
+    }
+
+    /**
+     * Convenience: foreignId named "{singular}_id" for a related table.
+     *
+     *   $t->foreignIdFor('users');            // creates user_id
+     *   $t->foreignIdFor('users', 'owner_id');// creates owner_id
+     */
+    public function foreignIdFor(string $table, string|null $column = null): ForeignIdColumnDefinition
+    {
+        $name = $column ?? rtrim($table, 's') . '_id';
+
+        return $this->foreignId($name);
     }
 
     // ── ALTER: column modification (Tier 1 addition) ──────────────
@@ -342,6 +485,39 @@ final class Blueprint
         return $this;
     }
 
+    /**
+     * MySQL ALTER algorithm: 'INPLACE' | 'INSTANT' | 'COPY'.
+     * Affects ALTER TABLE only; ignored by non-MySQL grammars.
+     */
+    public function algorithm(string $algorithm): self
+    {
+        $this->algorithm = strtoupper($algorithm);
+        return $this;
+    }
+
+    /** MySQL ALTER lock level: 'NONE' | 'SHARED' | 'EXCLUSIVE' | 'DEFAULT'. */
+    public function lock(string $lock): self
+    {
+        $this->lock = strtoupper($lock);
+        return $this;
+    }
+
+    /** Shorthand for the fastest online change: ALGORITHM=INSTANT. */
+    public function instant(): self
+    {
+        $this->algorithm = 'INSTANT';
+        return $this;
+    }
+
+    public function getAlgorithm(): string
+    {
+        return $this->algorithm;
+    }
+
+    public function getLock(): string
+    {
+        return $this->lock;
+    }
     // ── Accessors ─────────────────────────────────────────────────
 
     public function getTable(): string

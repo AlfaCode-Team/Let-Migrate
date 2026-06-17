@@ -17,15 +17,34 @@ use AlfaCode\LetMigrate\MigrationRecord;
  * ║  hold a reference to this interface.  All other code must   ║
  * ║  depend on MigrationServiceInterface.                       ║
  * ╚══════════════════════════════════════════════════════════════╝
+ *
+ * ────────────────────────────────────────────────────────────────────
+ * FIX SUMMARY
+ * ────────────────────────────────────────────────────────────────────
+ * The corrected MigrationService delegates to MigrationRunner and no
+ * longer calls the missing methods getLastBatches()/getAll()/
+ * getLastBatchNumber(). They are nevertheless added here as thin,
+ * well-defined convenience accessors so any other caller (and the
+ * DatabaseMigrationRepository implementation) has a single, consistent
+ * contract — and so the previously-broken call sites are now valid if
+ * re-introduced.
  */
 interface MigrationRepositoryInterface
 {
     /**
-     * Return every applied migration record, ordered ascending by batch then filename.
+     * Return every applied migration record, ordered ascending by batch
+     * then filename.
      *
      * @return MigrationRecord[]
      */
     public function all(): array;
+
+    /**
+     * Alias of all() — explicit name used by some callers (M-02).
+     *
+     * @return MigrationRecord[]
+     */
+    public function getAll(): array;
 
     /**
      * Return the highest batch number already applied, or 0 if none.
@@ -33,11 +52,24 @@ interface MigrationRepositoryInterface
     public function lastBatch(): int;
 
     /**
+     * Alias of lastBatch() — explicit name used by some callers (M-03).
+     */
+    public function getLastBatchNumber(): int;
+
+    /**
      * Return all records belonging to the last batch (for rollback).
      *
      * @return MigrationRecord[]
      */
     public function lastBatchRecords(): array;
+
+    /**
+     * Return all records belonging to the last N batches, newest first
+     * (M-01). Used by multi-step rollback.
+     *
+     * @return MigrationRecord[]
+     */
+    public function getLastBatches(int $steps): array;
 
     /**
      * Return all applied migration filenames in ascending order.

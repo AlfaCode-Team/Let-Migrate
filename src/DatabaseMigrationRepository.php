@@ -15,10 +15,17 @@ use AlfaCode\LetMigrate\Schema\GrammarInterface;
  * ║  ARCHITECTURE BOUNDARY — DO NOT INJECT DIRECTLY             ║
  * ║                                                             ║
  * ║  This class MUST only be instantiated by MigrationService   ║
- * ║  via MigrationServiceFactory.  All other application code   ║
- * ║  must depend on MigrationServiceInterface, never on this    ║
- * ║  concrete repository class.                                 ║
+ * ║  via MigrationServiceFactory.                               ║
  * ╚══════════════════════════════════════════════════════════════╝
+ *
+ * ────────────────────────────────────────────────────────────────────
+ * FIX SUMMARY (M-01 / M-02 / M-03)
+ * ────────────────────────────────────────────────────────────────────
+ * Implements the three convenience accessors added to
+ * MigrationRepositoryInterface so the contract is complete:
+ *   • getAll()             → alias of all()
+ *   • getLastBatchNumber() → alias of lastBatch()
+ *   • getLastBatches(int)  → records from the last N batches, newest first
  */
 final class DatabaseMigrationRepository implements MigrationRepositoryInterface
 {
@@ -30,7 +37,7 @@ final class DatabaseMigrationRepository implements MigrationRepositoryInterface
 
     public function all(): array
     {
-        $t = $this->driver->quoteIdentifier($this->table);
+        $t    = $this->driver->quoteIdentifier($this->table);
         $rows = $this->driver->fetchAll(
             "SELECT * FROM {$t} ORDER BY batch ASC, migration ASC",
         );
@@ -41,12 +48,24 @@ final class DatabaseMigrationRepository implements MigrationRepositoryInterface
         );
     }
 
+    /** M-02: explicit alias of all(). */
+    public function getAll(): array
+    {
+        return $this->all();
+    }
+
     public function lastBatch(): int
     {
-        $t = $this->driver->quoteIdentifier($this->table);
+        $t   = $this->driver->quoteIdentifier($this->table);
         $row = $this->driver->fetchOne("SELECT MAX(batch) AS max_batch FROM {$t}");
 
         return (int) ($row['max_batch'] ?? 0);
+    }
+
+    /** M-03: explicit alias of lastBatch(). */
+    public function getLastBatchNumber(): int
+    {
+        return $this->lastBatch();
     }
 
     public function lastBatchRecords(): array
@@ -57,7 +76,7 @@ final class DatabaseMigrationRepository implements MigrationRepositoryInterface
             return [];
         }
 
-        $t = $this->driver->quoteIdentifier($this->table);
+        $t    = $this->driver->quoteIdentifier($this->table);
         $rows = $this->driver->fetchAll(
             "SELECT * FROM {$t} WHERE batch = ? ORDER BY migration DESC",
             [$batch],
@@ -69,9 +88,33 @@ final class DatabaseMigrationRepository implements MigrationRepositoryInterface
         );
     }
 
+    /**
+     * M-01: return all records from the last N batches, newest batch first.
+     */
+    public function getLastBatches(int $steps): array
+    {
+        $lastBatch = $this->lastBatch();
+
+        if ($lastBatch === 0) {
+            return [];
+        }
+
+        $from = max(1, $lastBatch - $steps + 1);
+        $t    = $this->driver->quoteIdentifier($this->table);
+        $rows = $this->driver->fetchAll(
+            "SELECT * FROM {$t} WHERE batch >= ? ORDER BY batch DESC, migration DESC",
+            [$from],
+        );
+
+        return array_map(
+            static fn(array $r) => MigrationRecord::fromRow($r),
+            $rows,
+        );
+    }
+
     public function appliedFilenames(): array
     {
-        $t = $this->driver->quoteIdentifier($this->table);
+        $t    = $this->driver->quoteIdentifier($this->table);
         $rows = $this->driver->fetchAll(
             "SELECT migration FROM {$t} ORDER BY batch ASC, migration ASC",
         );
@@ -82,8 +125,8 @@ final class DatabaseMigrationRepository implements MigrationRepositoryInterface
     public function log(string $filename, int $batch): void
     {
         $this->driver->insert($this->table, [
-            'migration' => $filename,
-            'batch' => $batch,
+            'migration'  => $filename,
+            'batch'      => $batch,
             'applied_at' => date('Y-m-d H:i:s'),
         ]);
     }

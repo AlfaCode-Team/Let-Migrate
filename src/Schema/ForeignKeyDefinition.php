@@ -12,6 +12,17 @@ namespace AlfaCode\LetMigrate\Schema;
  *       ->on('vote_editions')
  *       ->onDelete('CASCADE')
  *       ->onUpdate('RESTRICT');
+ *
+ * ────────────────────────────────────────────────────────────────────
+ * FIX SUMMARY (NF-04 — belt & suspenders)
+ * ────────────────────────────────────────────────────────────────────
+ * AbstractGrammar::compileForeignKey() historically called getReferences(),
+ * getOn() and getName() — which did not exist (the real accessors are
+ * getReferencedColumn(), getReferencedTable(), getConstraintName()), so
+ * every FK compile fataled. PATCHES-phase1 P1-1 fixes the grammar to call
+ * the correct names; additionally, the three short aliases below are now
+ * declared here so BOTH naming styles resolve and the bug cannot recur in
+ * any overriding grammar that still uses the old names.
  */
 final class ForeignKeyDefinition
 {
@@ -39,6 +50,24 @@ final class ForeignKeyDefinition
         $this->referencedTable = $table;
 
         return $this;
+    }
+
+    /**
+     * Idempotently prefix the referenced table (used by SchemaBuilder when
+     * a global table prefix is configured, so FK targets resolve to the
+     * prefixed physical tables). Safe to call once per compile.
+     */
+    public function applyTablePrefix(string $prefix): void
+    {
+        if (
+            $prefix === ''
+            || $this->referencedTable === ''
+            || str_starts_with($this->referencedTable, $prefix)
+        ) {
+            return;
+        }
+
+        $this->referencedTable = $prefix . $this->referencedTable;
     }
 
     public function onDelete(string $action): self
@@ -82,7 +111,37 @@ final class ForeignKeyDefinition
         return $this->onUpdate('CASCADE');
     }
 
-    // ── Accessors ─────────────────────────────────────────────────
+    // ── PostgreSQL deferrable constraints (Phase 3) ───────────────
+    // Honoured by grammars that advertise deferrable support (PostgreSQL).
+    // MySQL ignores these (it parses but does not enforce DEFERRABLE).
+
+    private bool $deferrable        = false;
+    private bool $initiallyDeferred = false;
+
+    public function deferrable(bool $value = true): self
+    {
+        $this->deferrable = $value;
+        return $this;
+    }
+
+    public function initiallyDeferred(bool $value = true): self
+    {
+        $this->deferrable        = $this->deferrable || $value;
+        $this->initiallyDeferred = $value;
+        return $this;
+    }
+
+    public function isDeferrable(): bool
+    {
+        return $this->deferrable;
+    }
+
+    public function isInitiallyDeferred(): bool
+    {
+        return $this->initiallyDeferred;
+    }
+
+    // ── Canonical accessors ───────────────────────────────────────
 
     public function getColumn(): string
     {
@@ -110,6 +169,26 @@ final class ForeignKeyDefinition
     }
 
     public function getConstraintName(): string
+    {
+        return $this->constraintName;
+    }
+
+    // ── NF-04 aliases (so old grammar call-sites also resolve) ────
+
+    /** Alias of getReferencedColumn(). */
+    public function getReferences(): string
+    {
+        return $this->referencedColumn;
+    }
+
+    /** Alias of getReferencedTable(). */
+    public function getOn(): string
+    {
+        return $this->referencedTable;
+    }
+
+    /** Alias of getConstraintName(). */
+    public function getName(): string
     {
         return $this->constraintName;
     }

@@ -25,15 +25,15 @@ use PHPUnit\Framework\TestCase;
 
 final class MigrationRunnerTest extends TestCase
 {
-    private SQLiteDriver   $driver;
+    private SQLiteDriver $driver;
 
-    private SQLiteGrammar  $grammar;
+    private SQLiteGrammar $grammar;
 
-    private SchemaBuilder  $schema;
+    private SchemaBuilder $schema;
 
     private DatabaseMigrationRepository $repository;
 
-    private string         $migrationsDir;
+    private string $migrationsDir;
 
     protected function setUp(): void
     {
@@ -389,13 +389,21 @@ final class MigrationRunnerTest extends TestCase
 
     private function makeService(MigrationEventDispatcher|null $events = null): MigrationService
     {
-        $resolver = new FilesystemMigrationResolver([$this->migrationsDir]);
-
-        return new MigrationService(
-            repository: $this->repository,
+        $schemaBuilder = new SchemaBuilder($this->driver, $this->grammar);
+        $runner = new MigrationRunner(
+            repository: $repository,
             resolver: $resolver,
-            schema: $this->schema,
-            events: $events ?? new MigrationEventDispatcher(),
+            schema: $schemaBuilder,
+            events: $events,
+            transactional: true,
+        );
+        return new MigrationService(
+            runner: $runner,
+            repository: $repository,
+            resolver: $resolver,
+            schemaBuilder: $schemaBuilder,
+            dispatcher: $events,
+            paths: [$this->migrationsDir],
         );
     }
 }

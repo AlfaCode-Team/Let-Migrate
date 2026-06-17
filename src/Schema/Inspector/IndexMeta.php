@@ -6,6 +6,10 @@ namespace AlfaCode\LetMigrate\Schema\Inspector;
 
 /**
  * Immutable metadata for a single database index.
+ *
+ * S-04: ForeignKeyMeta was previously declared in this same file, which
+ * breaks PSR-4 autoloading (one class per file, file name == class name).
+ * It now lives in its own file: ForeignKeyMeta.php.
  */
 final class IndexMeta
 {
@@ -37,47 +41,6 @@ final class IndexMeta
             primary: (bool)   ($row['primary'] ?? false),
             unique:  (bool)   ($row['unique']  ?? false),
             type:    (string) ($row['type']    ?? 'BTREE'),
-        );
-    }
-}
-
-/**
- * Immutable metadata for a single foreign key constraint.
- */
-final class ForeignKeyMeta
-{
-    public function __construct(
-        /** Constraint name. */
-        public readonly string      $name,
-
-        /** Local column holding the foreign key value. */
-        public readonly string      $column,
-
-        /** Referenced table name. */
-        public readonly string      $referencedTable,
-
-        /** Referenced column name. */
-        public readonly string      $referencedColumn,
-
-        /** ON DELETE action (e.g. 'CASCADE', 'RESTRICT', 'SET NULL', 'NO ACTION'). */
-        public readonly string|null $onDelete,
-
-        /** ON UPDATE action. */
-        public readonly string|null $onUpdate,
-    ) {}
-
-    /**
-     * @param array<string, mixed> $row
-     */
-    public static function fromRow(array $row): self
-    {
-        return new self(
-            name:             (string)       ($row['name']              ?? ''),
-            column:           (string)       ($row['column']            ?? ''),
-            referencedTable:  (string)       ($row['referenced_table']  ?? ''),
-            referencedColumn: (string)       ($row['referenced_column'] ?? ''),
-            onDelete:         isset($row['on_delete']) ? (string) $row['on_delete'] : null,
-            onUpdate:         isset($row['on_update']) ? (string) $row['on_update'] : null,
         );
     }
 }

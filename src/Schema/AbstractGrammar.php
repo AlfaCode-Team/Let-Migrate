@@ -22,6 +22,7 @@ abstract class AbstractGrammar implements GrammarInterface
 {
     protected string $quoteChar = '`';
 
+    protected bool $supportsDeferrable = false;
     /**
      * Raw SQL expressions that must never be quoted as string literals.
      * Any value NOT in this list is quoted with addslashes().
@@ -45,12 +46,12 @@ abstract class AbstractGrammar implements GrammarInterface
 
     public function compileCreate(Blueprint $blueprint): string
     {
-        $table   = $this->quoteIdentifier($blueprint->getTable());
+        $table = $this->quoteIdentifier($blueprint->getTable());
         $columns = $this->compileColumns($blueprint);
         $indexes = $this->compileIndexes($blueprint);
-        $fks     = $this->compileForeignKeys($blueprint);
-        $parts   = array_filter(array_merge($columns, $indexes, $fks));
-        $body    = implode(',' . PHP_EOL . '    ', $parts);
+        $fks = $this->compileForeignKeys($blueprint);
+        $parts = array_filter(array_merge($columns, $indexes, $fks));
+        $body = implode(',' . PHP_EOL . '    ', $parts);
         $options = $this->compileTableOptions($blueprint);
 
         return 'CREATE TABLE ' . $table . ' (' . PHP_EOL . '    ' . $body . PHP_EOL . ')' . $options;
@@ -58,7 +59,7 @@ abstract class AbstractGrammar implements GrammarInterface
 
     public function compileAlter(Blueprint $blueprint): array
     {
-        $table   = $this->quoteIdentifier($blueprint->getTable());
+        $table = $this->quoteIdentifier($blueprint->getTable());
         $clauses = [];
 
         // Dropped columns
@@ -105,6 +106,17 @@ abstract class AbstractGrammar implements GrammarInterface
         if (!empty($addClauses)) {
             $clauses[] = 'ALTER TABLE ' . $table . PHP_EOL
                 . '    ' . implode(',' . PHP_EOL . '    ', $addClauses);
+        }
+
+        $suffix = $this->alterSuffix($blueprint);
+
+        if ($suffix !== '') {
+            $clauses = array_map(
+                static fn(string $c) => preg_match('/^\s*ALTER TABLE\b/i', $c)
+                ? rtrim($c) . $suffix
+                : $c,
+                $clauses,
+            );
         }
 
         return $clauses;
@@ -246,6 +258,15 @@ abstract class AbstractGrammar implements GrammarInterface
 
         return empty($options) ? '' : ' ' . implode(' ', $options);
     }
+    /**
+     * Optional suffix appended to each ALTER TABLE statement (e.g. MySQL
+     * ', ALGORITHM=INSTANT, LOCK=NONE'). Default: none. Overridden by
+     * grammars that support online-DDL options.
+     */
+    protected function alterSuffix(Blueprint $blueprint): string
+    {
+        return '';
+    }
 
     // ── Shared helpers ────────────────────────────────────────────
 
@@ -322,9 +343,10 @@ abstract class AbstractGrammar implements GrammarInterface
         $name = $this->quoteIdentifier($idx->getName());
 
         return match ($idx->getType()) {
-            'unique'  => "UNIQUE KEY {$name} ({$cols})",
+            'unique' => "UNIQUE KEY {$name} ({$cols})",
             'primary' => "PRIMARY KEY ({$cols})",
-            default   => "KEY {$name} ({$cols})",
+            'fulltext' => "FULLTEXT KEY {$name} ({$cols})",
+            default => "KEY {$name} ({$cols})",
         };
     }
 
@@ -340,20 +362,29 @@ abstract class AbstractGrammar implements GrammarInterface
 
     protected function compileForeignKey(ForeignKeyDefinition $fk): string
     {
-        $col  = $this->quoteIdentifier($fk->getColumn());
-        $ref  = $this->quoteIdentifier($fk->getReferences());
-        $on   = $this->quoteIdentifier($fk->getOn());
-        $name = $fk->getName() ? 'CONSTRAINT ' . $this->quoteIdentifier($fk->getName()) . ' ' : '';
+        $col = $this->quoteIdentifier($fk->getColumn());
+        $ref = $this->quoteIdentifier($fk->getReferencedColumn());
+        $on = $this->quoteIdentifier($fk->getReferencedTable());
+        $name = $fk->getConstraintName() !== ''
+            ? 'CONSTRAINT ' . $this->quoteIdentifier($fk->getConstraintName()) . ' '
+            : '';
 
         $sql = "{$name}FOREIGN KEY ({$col}) REFERENCES {$on} ({$ref})";
 
-        if ($fk->getOnDelete()) {
+        if ($fk->getOnDelete() !== '') {
             $sql .= ' ON DELETE ' . $fk->getOnDelete();
         }
-        if ($fk->getOnUpdate()) {
+        if ($fk->getOnUpdate() !== '') {
             $sql .= ' ON UPDATE ' . $fk->getOnUpdate();
         }
 
+        // at the END of compileForeignKey(), before `return $sql;`
+if ($this->supportsDeferrable && $fk->isDeferrable()) {
+    $sql .= ' DEFERRABLE';
+    $sql .= $fk->isInitiallyDeferred()
+        ? ' INITIALLY DEFERRED'
+        : ' INITIALLY IMMEDIATE';
+}
         return $sql;
     }
 

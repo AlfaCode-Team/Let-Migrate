@@ -412,4 +412,28 @@ final class BlueprintTest extends TestCase
 
         $this->assertSame('vote_editions', $bp->getTable());
     }
+    public function test_nf05_index_methods_do_not_fatal_and_set_type(): void
+    {
+        $bp = new Blueprint('t');
+        $bp->primary(['a']);
+        $bp->unique(['b'], 'uq_b');
+        $bp->index(['c']);
+
+        $idx = $bp->getIndexes();
+        $this->assertCount(3, $idx);
+        $this->assertSame(IndexDefinition::TYPE_PRIMARY, $idx[0]->getType());
+        $this->assertSame(IndexDefinition::TYPE_UNIQUE, $idx[1]->getType());
+        $this->assertSame(IndexDefinition::TYPE_INDEX, $idx[2]->getType());
+        $this->assertSame('uq_b', $idx[1]->getName());
+    }
+
+    public function test_nf05_unique_index_compiles_to_unique_keyword(): void
+    {
+        $bp = new Blueprint('t');
+        $bp->string('email');
+        $bp->unique(['email']);
+
+        $sql = (new \AlfaCode\LetMigrate\Driver\MySQL\MySQLGrammar())->compileCreate($bp);
+        $this->assertStringContainsString('UNIQUE KEY', $sql);  // not a plain KEY
+    }
 }
