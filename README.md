@@ -183,8 +183,14 @@ Files are sorted lexicographically, so the timestamp prefix guarantees correct o
 | `$t->id()` | `BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY` |
 | `$t->tinyInteger('x')` | `TINYINT` |
 | `$t->smallInteger('x')` | `SMALLINT` |
+| `$t->mediumInteger('x')` | `MEDIUMINT` (→ `INT` on non-MySQL) |
 | `$t->integer('x')` | `INT` |
 | `$t->bigInteger('x')` | `BIGINT` |
+| `$t->unsignedTinyInteger('x')` | `TINYINT UNSIGNED` |
+| `$t->unsignedSmallInteger('x')` | `SMALLINT UNSIGNED` |
+| `$t->unsignedMediumInteger('x')` | `MEDIUMINT UNSIGNED` |
+| `$t->unsignedInteger('x')` | `INT UNSIGNED` |
+| `$t->unsignedBigInteger('x')` | `BIGINT UNSIGNED` |
 | `$t->decimal('price', 8, 2)` | `DECIMAL(8,2)` |
 | `$t->float('rate')` | `FLOAT` |
 | `$t->double('score')` | `DOUBLE` |

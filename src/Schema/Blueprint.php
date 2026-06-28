@@ -57,6 +57,11 @@ final class Blueprint
     private string $engine = 'InnoDB';
     private string $charset = 'utf8mb4';
     private string $collation = 'utf8mb4_unicode_ci';
+    private string $rowFormat = '';
+    private string $comment = '';
+
+    /** @var array<int, array{name: string, expression: string}> */
+    private array $checks = [];
 
     private string $algorithm = '';
     private string $lock = '';
@@ -97,6 +102,33 @@ final class Blueprint
     public function bigInteger(string $name): ColumnDefinition
     {
         return $this->addColumn($name, 'BIGINT');
+    }
+
+    // ── Unsigned integer shorthands (Laravel parity) ──────────────
+
+    public function unsignedTinyInteger(string $name): ColumnDefinition
+    {
+        return $this->tinyInteger($name)->unsigned();
+    }
+
+    public function unsignedSmallInteger(string $name): ColumnDefinition
+    {
+        return $this->smallInteger($name)->unsigned();
+    }
+
+    public function unsignedMediumInteger(string $name): ColumnDefinition
+    {
+        return $this->mediumInteger($name)->unsigned();
+    }
+
+    public function unsignedInteger(string $name): ColumnDefinition
+    {
+        return $this->integer($name)->unsigned();
+    }
+
+    public function unsignedBigInteger(string $name): ColumnDefinition
+    {
+        return $this->bigInteger($name)->unsigned();
     }
 
     public function decimal(string $name, int $precision = 8, int $scale = 2): ColumnDefinition
@@ -486,6 +518,40 @@ final class Blueprint
     }
 
     /**
+     * MySQL physical row storage format: 'DYNAMIC' | 'COMPACT' | 'COMPRESSED'
+     * | 'REDUNDANT' | 'FIXED'. Emitted as ROW_FORMAT=… on the CREATE TABLE.
+     * Ignored by PostgreSQL / SQLite / SQL Server grammars (no equivalent).
+     */
+    public function rowFormat(string $format): self
+    {
+        $this->rowFormat = strtoupper($format);
+        return $this;
+    }
+
+    /**
+     * Table-level comment. Emitted as MySQL `COMMENT='…'` on the CREATE TABLE.
+     * Ignored by PostgreSQL / SQLite / SQL Server grammars (those use a separate
+     * `COMMENT ON TABLE` statement, which this single-statement compiler omits).
+     */
+    public function comment(string $text): self
+    {
+        $this->comment = $text;
+        return $this;
+    }
+
+    /**
+     * Add a table-level CHECK constraint. Pass a raw boolean SQL expression
+     * (use unquoted column names so it stays portable, e.g. 'status between 1 and 3').
+     * Emitted inline in the CREATE TABLE body and supported by MySQL 8.0.16+/
+     * MariaDB 10.2+, PostgreSQL, SQLite, and SQL Server.
+     */
+    public function check(string $expression, string $name = ''): self
+    {
+        $this->checks[] = ['name' => $name, 'expression' => $expression];
+        return $this;
+    }
+
+    /**
      * MySQL ALTER algorithm: 'INPLACE' | 'INSTANT' | 'COPY'.
      * Affects ALTER TABLE only; ignored by non-MySQL grammars.
      */
@@ -586,6 +652,22 @@ final class Blueprint
     public function getCollation(): string
     {
         return $this->collation;
+    }
+
+    public function getRowFormat(): string
+    {
+        return $this->rowFormat;
+    }
+
+    public function getComment(): string
+    {
+        return $this->comment;
+    }
+
+    /** @return array<int, array{name: string, expression: string}> */
+    public function getChecks(): array
+    {
+        return $this->checks;
     }
 
     // ── Internal helpers ──────────────────────────────────────────

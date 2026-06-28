@@ -50,7 +50,8 @@ abstract class AbstractGrammar implements GrammarInterface
         $columns = $this->compileColumns($blueprint);
         $indexes = $this->compileIndexes($blueprint);
         $fks = $this->compileForeignKeys($blueprint);
-        $parts = array_filter(array_merge($columns, $indexes, $fks));
+        $checks = $this->compileChecks($blueprint);
+        $parts = array_filter(array_merge($columns, $indexes, $fks, $checks));
         $body = implode(',' . PHP_EOL . '    ', $parts);
         $options = $this->compileTableOptions($blueprint);
 
@@ -240,6 +241,29 @@ abstract class AbstractGrammar implements GrammarInterface
         return [];
     }
 
+    // ── CHECK constraints ─────────────────────────────────────────
+
+    /**
+     * Compile table-level CHECK constraints for the CREATE TABLE body.
+     * Supported inline by every grammar this engine ships (MySQL 8.0.16+,
+     * MariaDB 10.2+, PostgreSQL, SQLite, SQL Server).
+     *
+     * @return string[]
+     */
+    protected function compileChecks(Blueprint $blueprint): array
+    {
+        $clauses = [];
+
+        foreach ($blueprint->getChecks() as $check) {
+            $constraint = $check['name'] !== ''
+                ? 'CONSTRAINT ' . $this->quoteIdentifier($check['name']) . ' '
+                : '';
+            $clauses[] = $constraint . 'CHECK (' . $check['expression'] . ')';
+        }
+
+        return $clauses;
+    }
+
     // ── Table options ─────────────────────────────────────────────
 
     protected function compileTableOptions(Blueprint $blueprint): string
@@ -254,6 +278,12 @@ abstract class AbstractGrammar implements GrammarInterface
         }
         if ($blueprint->getCollation() !== '') {
             $options[] = 'COLLATE=' . $blueprint->getCollation();
+        }
+        if ($blueprint->getRowFormat() !== '') {
+            $options[] = 'ROW_FORMAT=' . $blueprint->getRowFormat();
+        }
+        if ($blueprint->getComment() !== '') {
+            $options[] = "COMMENT='" . addslashes($blueprint->getComment()) . "'";
         }
 
         return empty($options) ? '' : ' ' . implode(' ', $options);
@@ -279,15 +309,35 @@ abstract class AbstractGrammar implements GrammarInterface
             $cols[] = $this->compileColumn($col);
         }
 
-        // Standalone PRIMARY KEY clause for non-autoincrement primary columns
+        // Standalone PRIMARY KEY clause for column-level primary keys.
+        // An auto-increment primary column needs the explicit clause on MySQL,
+        // PostgreSQL (SERIAL) and SQL Server (IDENTITY) — none of which imply a
+        // PK from the auto-increment keyword. Grammars that inline the PK on the
+        // column itself (SQLite: `INTEGER PRIMARY KEY AUTOINCREMENT`) report so
+        // via inlinesAutoIncrementPrimaryKey() and are skipped here.
         foreach ($blueprint->getColumns() as $col) {
-            if ($col->isPrimary() && !$col->isAutoIncrement()) {
-                $cols[] = 'PRIMARY KEY (' . $this->quoteIdentifier($col->getName()) . ')';
+            if (!$col->isPrimary()) {
+                continue;
+            }
+            if ($col->isAutoIncrement() && $this->inlinesAutoIncrementPrimaryKey()) {
                 break;
             }
+            $cols[] = 'PRIMARY KEY (' . $this->quoteIdentifier($col->getName()) . ')';
+            break;
         }
 
         return $cols;
+    }
+
+    /**
+     * Whether this grammar declares the PRIMARY KEY inline on an auto-increment
+     * column definition (so compileColumns() must NOT add a standalone clause).
+     * Default false (MySQL / PostgreSQL / SQL Server need the explicit clause);
+     * SQLite overrides to true.
+     */
+    protected function inlinesAutoIncrementPrimaryKey(): bool
+    {
+        return false;
     }
 
     protected function compileColumn(ColumnDefinition $col): string

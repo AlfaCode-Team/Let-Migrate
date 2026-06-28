@@ -64,7 +64,8 @@ final class MigrationServiceFactory
             pretend: $config->pretend,
             transactional: $config->transactional,
             allOrNothing: $config->allOrNothing,
-            breakpoints: $breakpoints,  
+            ignoreMissing: $config->ignoreMissing,
+            breakpoints: $breakpoints,
         );
 
 

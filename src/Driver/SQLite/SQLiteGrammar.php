@@ -63,6 +63,15 @@ final class SQLiteGrammar extends AbstractGrammar
         return 'PRAGMA foreign_keys = ON';
     }
 
+    /**
+     * SQLite declares the PK inline as `INTEGER PRIMARY KEY AUTOINCREMENT`,
+     * so AbstractGrammar must not add a standalone PRIMARY KEY clause.
+     */
+    protected function inlinesAutoIncrementPrimaryKey(): bool
+    {
+        return true;
+    }
+
     // ── Indexes must be separate statements in SQLite ─────────────
 
     /** @return string[] */
@@ -244,7 +253,9 @@ final class SQLiteGrammar extends AbstractGrammar
 
         if ($col->isAutoIncrement() && $col->isPrimary()) {
             // INTEGER PRIMARY KEY is SQLite's implicit rowid alias — AUTOINCREMENT is optional
-            // but explicit here for clarity
+            // but explicit here for clarity. Declared inline, so
+            // inlinesAutoIncrementPrimaryKey() returns true to suppress the
+            // standalone clause AbstractGrammar::compileColumns() would add.
             return $this->quoteIdentifier($col->getName()) . ' INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT';
         }
 

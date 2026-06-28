@@ -255,6 +255,68 @@ final class GrammarTest extends TestCase
         $this->assertNotSame('my_column', $quoted); // must be wrapped
     }
 
+    #[DataProvider('grammarProvider')]
+    public function test_all_grammars_emit_primary_key_for_autoincrement_id(string $grammarClass): void
+    {
+        $bp = new Blueprint('records');
+        $bp->id('record_id');
+
+        /** @var \AlfaCode\LetMigrate\Schema\GrammarInterface $grammar */
+        $grammar = new $grammarClass();
+        $sql = $grammar->compileCreate($bp);
+
+        // Every dialect must declare the auto-increment column as a PRIMARY KEY,
+        // whether inline (SQLite) or as a standalone clause (MySQL/PG/SQL Server).
+        $this->assertStringContainsString('PRIMARY KEY', $sql);
+        $this->assertStringContainsString('record_id', $sql);
+
+        // Exactly one PRIMARY KEY — never doubled.
+        $this->assertSame(1, substr_count($sql, 'PRIMARY KEY'));
+    }
+
+    #[DataProvider('grammarProvider')]
+    public function test_all_grammars_emit_check_constraints_inline(string $grammarClass): void
+    {
+        $bp = new Blueprint('projects');
+        $bp->id();
+        $bp->tinyInteger('status')->unsigned()->default(1);
+        $bp->check('status between 1 and 3', 'chk_status');
+
+        /** @var \AlfaCode\LetMigrate\Schema\GrammarInterface $grammar */
+        $grammar = new $grammarClass();
+        $sql = $grammar->compileCreate($bp);
+
+        $this->assertStringContainsString('CHECK (status between 1 and 3)', $sql);
+        $this->assertStringContainsString('chk_status', $sql);
+    }
+
+    public function test_mysql_emits_row_format_and_table_comment(): void
+    {
+        $bp = new Blueprint('projects');
+        $bp->id();
+        $bp->rowFormat('dynamic');                       // lower-case → normalised
+        $bp->comment('Core multi-tenant project registry');
+
+        $sql = (new MySQLGrammar())->compileCreate($bp);
+
+        $this->assertStringContainsString('ROW_FORMAT=DYNAMIC', $sql);
+        $this->assertStringContainsString("COMMENT='Core multi-tenant project registry'", $sql);
+    }
+
+    public function test_non_mysql_grammars_ignore_table_options(): void
+    {
+        $bp = new Blueprint('projects');
+        $bp->id();
+        $bp->rowFormat('DYNAMIC');
+        $bp->comment('reg');
+
+        foreach ([PostgreSQLGrammar::class, SQLiteGrammar::class, SQLServerGrammar::class] as $cls) {
+            $sql = (new $cls())->compileCreate($bp);
+            $this->assertStringNotContainsString('ROW_FORMAT', $sql);
+            $this->assertStringNotContainsString('COMMENT=', $sql);
+        }
+    }
+
     /** @return array<string, array{string}> */
     public static function grammarProvider(): array
     {
