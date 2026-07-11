@@ -97,19 +97,29 @@ abstract class AbstractPdoDriver implements DatabaseDriverInterface
 
     public function commit(): void
     {
-        $this->pdo()->commit();
+        // A DDL statement (CREATE/ALTER/DROP TABLE …) implicitly commits on
+        // MySQL / SQL Server, so the server-side transaction may already be
+        // gone. PDO::inTransaction() reflects that real state — guard on it so
+        // commit() is a safe no-op instead of throwing "no active transaction".
+        if ($this->pdo()->inTransaction()) {
+            $this->pdo()->commit();
+        }
         $this->inTransaction = false;
     }
 
     public function rollback(): void
     {
-        $this->pdo()->rollBack();
+        if ($this->pdo()->inTransaction()) {
+            $this->pdo()->rollBack();
+        }
         $this->inTransaction = false;
     }
 
     public function inTransaction(): bool
     {
-        return $this->inTransaction;
+        // Prefer the live PDO state (aware of implicit DDL commits); fall back
+        // to the cached flag when no connection has been opened yet.
+        return $this->pdo?->inTransaction() ?? $this->inTransaction;
     }
 
     /**

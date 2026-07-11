@@ -601,9 +601,16 @@ final class MigrationRunner implements MigrationRunnerInterface
 
         try {
             $work();
-            $driver->commit();
+            // DDL statements implicitly commit on MySQL / SQL Server, closing
+            // the transaction we opened. Only commit if one is still active,
+            // otherwise PDO throws "There is no active transaction".
+            if ($driver->inTransaction()) {
+                $driver->commit();
+            }
         } catch (\Throwable $e) {
-            $driver->rollback();
+            if ($driver->inTransaction()) {
+                $driver->rollback();
+            }
 
             throw $e;
         }
