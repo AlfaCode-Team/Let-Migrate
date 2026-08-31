@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace AlfaCode\LetMigrate\Driver\SQLite;
 
+use AlfaCode\LetMigrate\Exception\MigrationException;
 use AlfaCode\LetMigrate\Schema\AbstractGrammar;
 use AlfaCode\LetMigrate\Schema\Blueprint;
 use AlfaCode\LetMigrate\Schema\ColumnDefinition;
@@ -48,6 +49,45 @@ final class SQLiteGrammar extends AbstractGrammar
 )";
     }
 
+    /**
+     * SQLite cannot add a FOREIGN KEY to a table that already exists.
+     *
+     * There is no `ALTER TABLE … ADD CONSTRAINT` in SQLite at all: a foreign key
+     * can only be declared inside `CREATE TABLE`. Compiling one anyway produced
+     * `near "FOREIGN": syntax error`, which names the token SQLite choked on and
+     * nothing about why — so the reader goes looking for a typo in a statement
+     * that is perfectly good ANSI SQL and simply cannot exist here.
+     *
+     * Rewriting it automatically is not available at this layer. The 12-step
+     * rebuild is implemented (compileRecreateTable), but it needs the COMPLETE
+     * desired table definition, and an ALTER blueprint holds only the delta —
+     * recovering the rest means introspecting the live table, which a grammar,
+     * being a pure SQL compiler with no connection, cannot do.
+     *
+     * So this fails early and says what to do instead. The migration is the
+     * thing that has to change: declare the key in the CREATE TABLE that makes
+     * the column, or branch on the driver.
+     */
+    public function compileAlter(Blueprint $blueprint): array
+    {
+        if ($blueprint->getForeignKeys() !== []) {
+            $keys = [];
+
+            foreach ($blueprint->getForeignKeys() as $fk) {
+                $keys[] = sprintf('%s → %s', $fk->getColumn(), $fk->getReferencedTable());
+            }
+
+            throw new MigrationException(sprintf(
+                'SQLite cannot add a foreign key to the existing table "%s" (%s). '
+                . 'Declare it in the CREATE TABLE that creates the column, or skip it for this driver.',
+                $blueprint->getTable(),
+                implode(', ', $keys),
+            ));
+        }
+
+        return parent::compileAlter($blueprint);
+    }
+
     public function compileRename(string $from, string $to): string
     {
         return "ALTER TABLE {$this->quoteIdentifier($from)} RENAME TO {$this->quoteIdentifier($to)}";
@@ -61,6 +101,15 @@ final class SQLiteGrammar extends AbstractGrammar
     public function compileForeignKeyChecksOn(): string
     {
         return 'PRAGMA foreign_keys = ON';
+    }
+
+    /**
+     * SQLite declares the PK inline as `INTEGER PRIMARY KEY AUTOINCREMENT`,
+     * so AbstractGrammar must not add a standalone PRIMARY KEY clause.
+     */
+    protected function inlinesAutoIncrementPrimaryKey(): bool
+    {
+        return true;
     }
 
     // ── Indexes must be separate statements in SQLite ─────────────
@@ -244,7 +293,9 @@ final class SQLiteGrammar extends AbstractGrammar
 
         if ($col->isAutoIncrement() && $col->isPrimary()) {
             // INTEGER PRIMARY KEY is SQLite's implicit rowid alias — AUTOINCREMENT is optional
-            // but explicit here for clarity
+            // but explicit here for clarity. Declared inline, so
+            // inlinesAutoIncrementPrimaryKey() returns true to suppress the
+            // standalone clause AbstractGrammar::compileColumns() would add.
             return $this->quoteIdentifier($col->getName()) . ' INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT';
         }
 

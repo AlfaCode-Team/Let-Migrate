@@ -46,6 +46,16 @@ final class MigrationConfig
         public readonly bool        $allOrNothing = false,
 
         /**
+         * When true, rollback/reset SKIP any recorded migration whose file is
+         * not resolvable in the configured paths, instead of throwing. This
+         * lets a SCOPED run (paths narrowed to one module's migrations) roll
+         * back ONLY that module's migrations while leaving every other module's
+         * records — and a SINGLE shared tracking table — untouched. Default
+         * false preserves the strict "file must exist" behaviour.
+         */
+        public readonly bool        $ignoreMissing = false,
+
+        /**
          * Absolute path to the directory containing seeder files.
          * When null, seeding is disabled (no seed commands will run).
          */
@@ -85,6 +95,7 @@ final class MigrationConfig
             pretend:       (bool)   ($config['pretend']                   ?? false),
             transactional: (bool)   ($config['transactional']             ?? true),
             allOrNothing:  (bool)   ($config['all_or_nothing']             ?? false),
+            ignoreMissing: (bool)   ($config['ignore_missing']            ?? false),
             seedersPath:   isset($config['seeders_path'])
                                ? (string) $config['seeders_path']
                                : null,

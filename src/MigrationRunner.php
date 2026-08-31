@@ -49,6 +49,7 @@ final class MigrationRunner implements MigrationRunnerInterface
         private readonly bool                         $transactional = true,
         private readonly bool                         $allOrNothing = false,
         private readonly \AlfaCode\LetMigrate\BreakpointStore|null $breakpoints = null,
+        private readonly bool                         $ignoreMissing = false,
     ) {}
 
     /**
@@ -219,6 +220,18 @@ final class MigrationRunner implements MigrationRunnerInterface
 
         foreach ($toRollback as $filename) {
             if (!isset($all[$filename])) {
+                // Scoped rollback: when the paths are narrowed to one module,
+                // every OTHER module's recorded migration is "missing" here.
+                // Skip it (leaving its record + schema intact) so a single
+                // shared tracking table can host many modules, each rolled
+                // back in isolation.
+                if ($this->ignoreMissing) {
+                    $this->logger->info(
+                        "[LetMigrate] Skipping out-of-scope migration (ignore_missing): {$filename}",
+                    );
+                    continue;
+                }
+
                 throw new MigrationException(
                     "Cannot roll back '{$filename}': migration file not found in any registered path.",
                 );
@@ -588,9 +601,16 @@ final class MigrationRunner implements MigrationRunnerInterface
 
         try {
             $work();
-            $driver->commit();
+            // DDL statements implicitly commit on MySQL / SQL Server, closing
+            // the transaction we opened. Only commit if one is still active,
+            // otherwise PDO throws "There is no active transaction".
+            if ($driver->inTransaction()) {
+                $driver->commit();
+            }
         } catch (\Throwable $e) {
-            $driver->rollback();
+            if ($driver->inTransaction()) {
+                $driver->rollback();
+            }
 
             throw $e;
         }
