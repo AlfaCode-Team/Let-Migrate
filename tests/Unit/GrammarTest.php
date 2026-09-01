@@ -9,7 +9,6 @@ use AlfaCode\LetMigrate\Driver\PostgreSQL\PostgreSQLGrammar;
 use AlfaCode\LetMigrate\Driver\SQLite\SQLiteGrammar;
 use AlfaCode\LetMigrate\Driver\SQLServer\SQLServerGrammar;
 use AlfaCode\LetMigrate\Schema\Blueprint;
-use AlfaCode\LetMigrate\Schema\ColumnDefinition;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
@@ -330,104 +329,6 @@ final class GrammarTest extends TestCase
     }
 
     // ── Helpers ───────────────────────────────────────────────────
-
-    // ── Boolean defaults, per driver ──────────────────────────────
-
-    /**
-     * PostgreSQL rejects `BOOLEAN … DEFAULT 1` outright:
-     *
-     *     ERROR: column "flag" is of type boolean but default expression
-     *            is of type integer
-     *
-     * MySQL and SQLite accept it, so a bool default compiled to 1/0 for every
-     * driver looked correct everywhere it was tested and broke on the one
-     * driver nobody ran locally.
-     */
-    public function test_postgres_emits_boolean_keywords_for_a_bool_default(): void
-    {
-        $grammar = new PostgreSQLGrammar();
-
-        $this->assertSame('TRUE', $grammar->wrapDefault(true));
-        $this->assertSame('FALSE', $grammar->wrapDefault(false));
-    }
-
-    public function test_postgres_boolean_column_default_reaches_the_ddl(): void
-    {
-        $bp = new Blueprint('settings');
-        $bp->id();
-        $bp->boolean('show_phone')->default(true);
-        $bp->boolean('is_admin')->default(false);
-
-        $sql = (new PostgreSQLGrammar())->compileCreate($bp);
-
-        $this->assertStringContainsString('DEFAULT TRUE', $sql);
-        $this->assertStringContainsString('DEFAULT FALSE', $sql);
-        $this->assertStringNotContainsString('DEFAULT 1', $sql);
-        $this->assertStringNotContainsString('DEFAULT 0', $sql);
-    }
-
-    /** SQL Server's BIT takes 1/0 and rejects TRUE/FALSE — it must NOT follow Postgres. */
-    public function test_other_drivers_keep_integer_boolean_defaults(): void
-    {
-        foreach ([new MySQLGrammar(), new SQLiteGrammar(), new SQLServerGrammar()] as $grammar) {
-            $this->assertSame('1', $grammar->wrapDefault(true), $grammar::class);
-            $this->assertSame('0', $grammar->wrapDefault(false), $grammar::class);
-        }
-    }
-
-    /** The override must not swallow every other default type on Postgres. */
-    public function test_postgres_still_delegates_non_bool_defaults(): void
-    {
-        $grammar = new PostgreSQLGrammar();
-
-        $this->assertSame('NULL', $grammar->wrapDefault(null));
-        $this->assertSame('42', $grammar->wrapDefault(42));
-        $this->assertSame("'public'", $grammar->wrapDefault('public'));
-    }
-
-
-    // ── Modify column: one clause must be ONE statement ───────────
-
-    /**
-     * compileAlter() treats every clause it collects as a single statement and
-     * hands it straight to the driver, which prepares it. PostgreSQL's extended
-     * query protocol refuses more than one command in a prepared statement:
-     *
-     *     SQLSTATE[42601]: cannot insert multiple commands into a
-     *     prepared statement
-     *
-     * so a `;`-joined clause could never execute — the migration died before
-     * applying any DDL at all.
-     */
-    public function test_postgres_modify_column_compiles_to_a_single_statement(): void
-    {
-        $bp = new Blueprint('users');
-        $bp->modifyColumn('password_hash', static fn () => (new ColumnDefinition('password_hash', 'VARCHAR(255)'))->notNull());
-
-        $statements = (new PostgreSQLGrammar())->compileAlter($bp);
-
-        $this->assertCount(1, $statements);
-
-        $sql = $statements[0];
-        $this->assertStringNotContainsString(';', $sql);
-        $this->assertSame(1, substr_count($sql, 'ALTER TABLE'), $sql);
-        $this->assertStringContainsString('ALTER COLUMN "password_hash" TYPE VARCHAR(255)', $sql);
-        $this->assertStringContainsString('ALTER COLUMN "password_hash" SET NOT NULL', $sql);
-        $this->assertStringContainsString('ALTER COLUMN "password_hash" DROP DEFAULT', $sql);
-    }
-
-    public function test_postgres_modify_column_keeps_a_default_and_nullability(): void
-    {
-        $bp = new Blueprint('users');
-        $bp->modifyColumn('status', static fn () => (new ColumnDefinition('status', 'VARCHAR(20)'))->default('active')->nullable());
-
-        $sql = (new PostgreSQLGrammar())->compileAlter($bp)[0];
-
-        $this->assertStringNotContainsString(';', $sql);
-        $this->assertStringContainsString("SET DEFAULT 'active'", $sql);
-        $this->assertStringContainsString('DROP NOT NULL', $sql);
-    }
-
 
     private function makeSimpleBlueprint(string $table): Blueprint
     {

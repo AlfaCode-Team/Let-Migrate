@@ -181,7 +181,6 @@ Files are sorted lexicographically, so the timestamp prefix guarantees correct o
 | Method | SQL Type |
 |---|---|
 | `$t->id()` | `BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY` |
-| `$t->bigIncrements('id')` | `BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY` (alias of `id()`) |
 | `$t->tinyInteger('x')` | `TINYINT` |
 | `$t->smallInteger('x')` | `SMALLINT` |
 | `$t->mediumInteger('x')` | `MEDIUMINT` (→ `INT` on non-MySQL) |

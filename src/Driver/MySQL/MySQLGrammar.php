@@ -86,21 +86,4 @@ final class MySQLGrammar extends AbstractGrammar
     {
         return 'AUTO_INCREMENT';
     }
-
-    /**
-     * MySQL is the one engine that takes several ADD clauses in one statement,
-     * and it is worth using: each ALTER TABLE on InnoDB can rebuild the table,
-     * so three statements can mean three rebuilds.
-     */
-    protected function supportsMultiClauseAlter(): bool
-    {
-        return true;
-    }
-
-    /** `ALTER TABLE … ADD KEY` — MySQL spells it inline. */
-    protected function supportsInlineIndexInAlter(): bool
-    {
-        return true;
-    }
-
 }

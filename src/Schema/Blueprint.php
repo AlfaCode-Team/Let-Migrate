@@ -77,18 +77,6 @@ final class Blueprint
         return $this->bigInteger($name)->unsigned()->autoIncrement()->primary();
     }
 
-    /**
-     * Auto-incrementing UNSIGNED BIGINT primary key (Laravel parity).
-     *
-     * Identical to id(), which is the idiomatic spelling in this engine;
-     * bigIncrements() exists so a migration ported from Laravel compiles
-     * unchanged.
-     */
-    public function bigIncrements(string $name = 'id'): ColumnDefinition
-    {
-        return $this->bigInteger($name)->unsigned()->autoIncrement()->primary();
-    }
-
     public function uuid(string $name = 'id'): ColumnDefinition
     {
         return $this->char($name, 36)->primary();
