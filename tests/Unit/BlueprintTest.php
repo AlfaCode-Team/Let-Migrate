@@ -25,6 +25,28 @@ final class BlueprintTest extends TestCase
         $this->assertTrue($cols[0]->isPrimary());
     }
 
+    public function test_big_increments_matches_id(): void
+    {
+        $bp = new Blueprint('users');
+        $bp->bigIncrements();
+        $cols = $bp->getColumns();
+
+        $this->assertCount(1, $cols);
+        $this->assertSame('id', $cols[0]->getName());
+        $this->assertStringContainsString('BIGINT', $cols[0]->getType());
+        $this->assertTrue($cols[0]->isUnsigned());
+        $this->assertTrue($cols[0]->isAutoIncrement());
+        $this->assertTrue($cols[0]->isPrimary());
+    }
+
+    public function test_big_increments_with_custom_name(): void
+    {
+        $bp = new Blueprint('votes');
+        $bp->bigIncrements('VoteID');
+
+        $this->assertSame('VoteID', $bp->getColumns()[0]->getName());
+    }
+
     public function test_id_with_custom_name(): void
     {
         $bp = new Blueprint('votes');
