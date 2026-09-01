@@ -330,6 +330,61 @@ final class GrammarTest extends TestCase
 
     // ── Helpers ───────────────────────────────────────────────────
 
+    // ── Boolean defaults, per driver ──────────────────────────────
+
+    /**
+     * PostgreSQL rejects `BOOLEAN … DEFAULT 1` outright:
+     *
+     *     ERROR: column "flag" is of type boolean but default expression
+     *            is of type integer
+     *
+     * MySQL and SQLite accept it, so a bool default compiled to 1/0 for every
+     * driver looked correct everywhere it was tested and broke on the one
+     * driver nobody ran locally.
+     */
+    public function test_postgres_emits_boolean_keywords_for_a_bool_default(): void
+    {
+        $grammar = new PostgreSQLGrammar();
+
+        $this->assertSame('TRUE', $grammar->wrapDefault(true));
+        $this->assertSame('FALSE', $grammar->wrapDefault(false));
+    }
+
+    public function test_postgres_boolean_column_default_reaches_the_ddl(): void
+    {
+        $bp = new Blueprint('settings');
+        $bp->id();
+        $bp->boolean('show_phone')->default(true);
+        $bp->boolean('is_admin')->default(false);
+
+        $sql = (new PostgreSQLGrammar())->compileCreate($bp);
+
+        $this->assertStringContainsString('DEFAULT TRUE', $sql);
+        $this->assertStringContainsString('DEFAULT FALSE', $sql);
+        $this->assertStringNotContainsString('DEFAULT 1', $sql);
+        $this->assertStringNotContainsString('DEFAULT 0', $sql);
+    }
+
+    /** SQL Server's BIT takes 1/0 and rejects TRUE/FALSE — it must NOT follow Postgres. */
+    public function test_other_drivers_keep_integer_boolean_defaults(): void
+    {
+        foreach ([new MySQLGrammar(), new SQLiteGrammar(), new SQLServerGrammar()] as $grammar) {
+            $this->assertSame('1', $grammar->wrapDefault(true), $grammar::class);
+            $this->assertSame('0', $grammar->wrapDefault(false), $grammar::class);
+        }
+    }
+
+    /** The override must not swallow every other default type on Postgres. */
+    public function test_postgres_still_delegates_non_bool_defaults(): void
+    {
+        $grammar = new PostgreSQLGrammar();
+
+        $this->assertSame('NULL', $grammar->wrapDefault(null));
+        $this->assertSame('42', $grammar->wrapDefault(42));
+        $this->assertSame("'public'", $grammar->wrapDefault('public'));
+    }
+
+
     private function makeSimpleBlueprint(string $table): Blueprint
     {
         $bp = new Blueprint($table);
