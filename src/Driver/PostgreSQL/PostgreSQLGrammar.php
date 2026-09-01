@@ -32,6 +32,32 @@ final class PostgreSQLGrammar extends AbstractGrammar
     protected string $quoteChar = '"';
 
     protected bool $supportsDeferrable = true;
+    /**
+     * PostgreSQL will not accept an integer default on a BOOLEAN column.
+     *
+     * The base grammar emits a bool default as `1` / `0`, which MySQL accepts
+     * (its BOOLEAN is TINYINT(1)) and SQLite accepts (it is dynamically typed).
+     * PostgreSQL is strict about it:
+     *
+     *     ERROR: column "show_phone" is of type boolean but default
+     *            expression is of type integer
+     *
+     * so `$t->boolean('x')->default(true)` — correct, portable, documented use
+     * of the fluent API — produced DDL that only failed on this one driver, and
+     * only once someone actually ran it against Postgres. Emit the keywords.
+     *
+     * SQL Server keeps the base behaviour deliberately: its BIT type takes
+     * 1 / 0 and rejects TRUE / FALSE.
+     */
+    public function wrapDefault(mixed $value): string
+    {
+        if (is_bool($value)) {
+            return $value ? 'TRUE' : 'FALSE';
+        }
+
+        return parent::wrapDefault($value);
+    }
+
     public function compileDropIfExists(string $table): string
     {
         return "DROP TABLE IF EXISTS {$this->quoteIdentifier($table)} CASCADE";
