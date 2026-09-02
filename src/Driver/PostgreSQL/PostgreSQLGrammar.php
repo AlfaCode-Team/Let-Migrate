@@ -32,6 +32,32 @@ final class PostgreSQLGrammar extends AbstractGrammar
     protected string $quoteChar = '"';
 
     protected bool $supportsDeferrable = true;
+
+    /**
+     * PostgreSQL will not accept an integer default on a BOOLEAN column.
+     *
+     * The base grammar emits a bool default as `1` / `0`, which MySQL accepts
+     * (its BOOLEAN is TINYINT(1)) and SQLite accepts (it is dynamically typed).
+     * PostgreSQL is strict about it:
+     *
+     *     ERROR: column "show_phone" is of type boolean but default
+     *            expression is of type integer
+     *
+     * so `$t->boolean('x')->default(true)` — correct, portable, documented use
+     * of the fluent API — produces DDL that only fails on this one driver, and
+     * only once someone actually runs it against Postgres. Emit the keywords.
+     *
+     * SQL Server keeps the base behaviour deliberately: its BIT type takes
+     * 1 / 0 and rejects TRUE / FALSE.
+     */
+    public function wrapDefault(mixed $value): string
+    {
+        if (is_bool($value)) {
+            return $value ? 'TRUE' : 'FALSE';
+        }
+
+        return parent::wrapDefault($value);
+    }
     public function compileDropIfExists(string $table): string
     {
         return "DROP TABLE IF EXISTS {$this->quoteIdentifier($table)} CASCADE";
@@ -157,22 +183,34 @@ final class PostgreSQLGrammar extends AbstractGrammar
     {
         $qcol = $this->quoteIdentifier($col->getName());
         $newType = $this->mapType($col->getType());
-        $clauses = [];
 
-        $clauses[] = "ALTER TABLE {$quotedTable} ALTER COLUMN {$qcol} TYPE {$newType}";
+        // ONE statement, several comma-separated actions — not several
+        // statements joined by ';'. compileAlter() treats each clause it
+        // collects as a single statement and hands it straight to the driver,
+        // and PDO_pgsql prepares it, so a ';'-joined string dies with
+        //
+        //     SQLSTATE[42601]: cannot insert multiple commands into a
+        //     prepared statement
+        //
+        // before a single byte of DDL is applied. PostgreSQL orders the
+        // subcommands itself, by pass, not by the order written here: DROP
+        // DEFAULT, then ALTER TYPE, then SET DEFAULT. So combining them is
+        // not merely legal, it is the sequence that avoids "default for
+        // column cannot be cast automatically" when the type changes under an
+        // existing default.
+        $actions = [];
 
-        if ($col->hasDefault()) {
-            $clauses[] = "ALTER TABLE {$quotedTable} ALTER COLUMN {$qcol} SET DEFAULT "
-                . $this->wrapDefault($col->getDefault());
-        } else {
-            $clauses[] = "ALTER TABLE {$quotedTable} ALTER COLUMN {$qcol} DROP DEFAULT";
-        }
+        $actions[] = "ALTER COLUMN {$qcol} TYPE {$newType}";
 
-        $clauses[] = $col->isNullable()
-            ? "ALTER TABLE {$quotedTable} ALTER COLUMN {$qcol} DROP NOT NULL"
-            : "ALTER TABLE {$quotedTable} ALTER COLUMN {$qcol} SET NOT NULL";
+        $actions[] = $col->hasDefault()
+            ? "ALTER COLUMN {$qcol} SET DEFAULT " . $this->wrapDefault($col->getDefault())
+            : "ALTER COLUMN {$qcol} DROP DEFAULT";
 
-        return implode(";\n", $clauses);
+        $actions[] = $col->isNullable()
+            ? "ALTER COLUMN {$qcol} DROP NOT NULL"
+            : "ALTER COLUMN {$qcol} SET NOT NULL";
+
+        return "ALTER TABLE {$quotedTable} " . implode(', ', $actions);
     }
 
     /**
