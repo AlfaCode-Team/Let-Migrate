@@ -77,6 +77,19 @@ final class Blueprint
         return $this->bigInteger($name)->unsigned()->autoIncrement()->primary();
     }
 
+    /**
+     * Auto-incrementing UNSIGNED BIGINT primary key (Laravel parity).
+     *
+     * Identical to id(), which is the idiomatic spelling in this engine;
+     * bigIncrements() exists so a migration ported from Laravel compiles
+     * unchanged. Applications in the field call it, so it is API — removing it
+     * breaks a migration that has already run somewhere.
+     */
+    public function bigIncrements(string $name = 'id'): ColumnDefinition
+    {
+        return $this->id($name);
+    }
+
     public function uuid(string $name = 'id'): ColumnDefinition
     {
         return $this->char($name, 36)->primary();
@@ -482,19 +495,40 @@ final class Blueprint
 
     // ── ALTER: drop ───────────────────────────────────────────────
 
-    public function dropColumn(string $name): void
+    /**
+     * Drop one or more columns.
+     *
+     * Variadic because dropping several columns in one ALTER is the common
+     * case and `dropColumn('a', 'b')` is how every other migration engine
+     * spells it — the single-argument form silently dropped only the first
+     * name, which is the kind of mistake that shows up as a leftover column
+     * long after the migration is green.
+     */
+    public function dropColumn(string ...$names): self
     {
-        $this->droppedColumns[] = $name;
+        foreach ($names as $name) {
+            $this->droppedColumns[] = $name;
+        }
+
+        return $this;
     }
 
-    public function dropIndex(string $name): void
+    public function dropIndex(string ...$names): self
     {
-        $this->droppedIndexes[] = $name;
+        foreach ($names as $name) {
+            $this->droppedIndexes[] = $name;
+        }
+
+        return $this;
     }
 
-    public function dropForeign(string $name): void
+    public function dropForeign(string ...$names): self
     {
-        $this->droppedForeignKeys[] = $name;
+        foreach ($names as $name) {
+            $this->droppedForeignKeys[] = $name;
+        }
+
+        return $this;
     }
 
     // ── Table-level options ───────────────────────────────────────
@@ -668,6 +702,29 @@ final class Blueprint
     public function getChecks(): array
     {
         return $this->checks;
+    }
+
+    /**
+     * Append a ColumnDefinition that was built elsewhere.
+     *
+     * Every other column method constructs its own definition. This one exists
+     * for rebuilding a table from what a SchemaInspector reports — the SQLite
+     * modify-column path, where the column already exists and must be carried
+     * across verbatim rather than re-described by the migration.
+     */
+    public function addColumnDefinition(ColumnDefinition $column): ColumnDefinition
+    {
+        $this->columns[] = $column;
+
+        return $column;
+    }
+
+    /** Append an IndexDefinition built elsewhere — see addColumnDefinition(). */
+    public function addIndexDefinition(IndexDefinition $index): IndexDefinition
+    {
+        $this->indexes[] = $index;
+
+        return $index;
     }
 
     // ── Internal helpers ──────────────────────────────────────────

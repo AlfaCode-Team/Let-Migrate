@@ -5,6 +5,39 @@
 
 ---
 
+
+## Testing against real databases
+
+The unit suite compiles SQL and inspects the string. That cannot catch the one
+failure mode that matters for a migration engine: SQL that is well-formed,
+plausible, and refused by an engine. `ADD COLUMN` reads correctly on all four
+drivers and is a syntax error on SQL Server; `BOOLEAN DEFAULT 1` is fine on
+three and a type error on PostgreSQL.
+
+So `tests/Live` executes the compiler against every engine the machine can
+reach. Point it at your servers with one URL per driver:
+
+```bash
+export LETMIGRATE_DB_MYSQL=mysql://root:secret@127.0.0.1:3306
+export LETMIGRATE_DB_PGSQL=pgsql://postgres:secret@127.0.0.1:5432
+export LETMIGRATE_DB_SQLSRV=sqlsrv://sa:Secret_123@127.0.0.1:1433
+
+vendor/bin/phpunit --testsuite Live --display-skipped
+```
+
+`GROUND_DB_*` is honoured as a fallback, so a machine already set up for
+`hkm ground migrate` needs no new configuration. SQLite needs none at all.
+
+Each run creates its own scratch database, exercises create / insert / add
+columns / add index / modify column / foreign key / drop index + columns, reads
+the schema back through the inspector, and drops the scratch database again. It
+never touches an existing one.
+
+A driver that is not configured, has no PDO extension, or is not answering
+**skips with the reason** — it is never silently dropped and never counted as a
+pass. "3 of 4 engines were not tested" is the most important line such a run can
+print, and it is worthless if a missing server looks like a green tick.
+
 ## Features
 
 - **Four databases out of the box** — MySQL/MariaDB, PostgreSQL, SQLite, SQL Server
@@ -181,6 +214,7 @@ Files are sorted lexicographically, so the timestamp prefix guarantees correct o
 | Method | SQL Type |
 |---|---|
 | `$t->id()` | `BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY` |
+| `$t->bigIncrements('id')` | `BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY` (alias of `id()`) |
 | `$t->tinyInteger('x')` | `TINYINT` |
 | `$t->smallInteger('x')` | `SMALLINT` |
 | `$t->mediumInteger('x')` | `MEDIUMINT` (→ `INT` on non-MySQL) |
@@ -238,7 +272,19 @@ $t->string('name')
     ->unique()           // inline UNIQUE constraint
     ->primary()          // inline PRIMARY KEY
     ->autoIncrement();   // AUTO_INCREMENT
+
+// Timestamp defaults
+$t->timestamp('created_at')->useCurrent();              // DEFAULT CURRENT_TIMESTAMP
+$t->dateTime('updated_at')->useCurrent()                // ... and auto-update on every UPDATE
+    ->useCurrentOnUpdate();
+
+// useCurrent() / useCurrentOnUpdate() are Laravel-parity aliases of
+// default('CURRENT_TIMESTAMP') and onUpdateCurrentTimestamp(). Both spellings
+// compile identically on all four drivers.
 ```
+
+> There is **no** fluent `->index()` modifier. An index is declared on the
+> Blueprint, not the column: `$t->index(['col'])`.
 
 ### Indexes
 

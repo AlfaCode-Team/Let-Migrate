@@ -11,6 +11,10 @@ namespace AlfaCode\LetMigrate\Schema;
  *
  *   $t->string('email', 191)->notNull()->unique()->after('name');
  *   $t->dateTime('updated_at')->onUpdateCurrentTimestamp();
+ *   $t->timestamp('created_at')->useCurrent();
+ *
+ * NOTE: there is no fluent ->index() modifier. An index is declared on the
+ * BLUEPRINT, not the column: $t->index(['lock_key']).
  *
  * @fixed onUpdateCurrentTimestamp() — replaces the raw string
  *        'ON UPDATE CURRENT_TIMESTAMP' that was baked into Blueprint::timestamps().
@@ -127,6 +131,38 @@ final class ColumnDefinition
     {
         $this->onUpdateCurrentTs = true;
         return $this;
+    }
+
+    /**
+     * `DEFAULT CURRENT_TIMESTAMP` (Laravel parity).
+     *
+     * An exact alias of default('CURRENT_TIMESTAMP'), which is the idiomatic
+     * spelling in this engine. It exists because a migration ported from
+     * Laravel calls it, and the failure mode without it is a fatal
+     * "Call to undefined method" at the moment the migration runs — i.e. during
+     * a deploy, on a schema change, which is the worst place to discover a
+     * method name.
+     *
+     * The string is carried as a RAW expression, not a quoted literal: every
+     * grammar recognises CURRENT_TIMESTAMP and emits it unquoted, so this is
+     * portable across all four drivers.
+     */
+    public function useCurrent(): self
+    {
+        return $this->default('CURRENT_TIMESTAMP');
+    }
+
+    /**
+     * `ON UPDATE CURRENT_TIMESTAMP` (Laravel parity).
+     *
+     * An exact alias of onUpdateCurrentTimestamp(). Like Laravel's, it sets
+     * ONLY the on-update behaviour — it does not also set a default, so
+     * `->useCurrent()->useCurrentOnUpdate()` is the pair that gives a column
+     * both, exactly as it reads.
+     */
+    public function useCurrentOnUpdate(): self
+    {
+        return $this->onUpdateCurrentTimestamp();
     }
 
     // ── Accessors ─────────────────────────────────────────────────
