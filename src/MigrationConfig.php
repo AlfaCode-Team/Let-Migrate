@@ -82,9 +82,16 @@ final class MigrationConfig
      */
     public static function fromArray(array $config): self
     {
-        // Normalise 'path' (singular) → 'paths' (array)
+        // Normalise 'path' (singular) → 'paths' (array).
+        //
+        // The singular is a FALLBACK, not an override: it applies only when no
+        // 'paths' were given. Applying it unconditionally — as this did — meant
+        // a config carrying both silently ran the one path and ignored the
+        // array, which is precisely the scoped multi-module setup 'paths'
+        // exists for, and it failed by doing less work rather than by erroring.
         $paths = $config['paths'] ?? [];
-        if (isset($config['path']) && is_string($config['path'])) {
+
+        if ($paths === [] && isset($config['path']) && is_string($config['path'])) {
             $paths = [$config['path']];
         }
 
