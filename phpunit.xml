@@ -14,6 +14,17 @@
         <testsuite name="Integration">
             <directory>tests/Integration</directory>
         </testsuite>
+        <!--
+            Live: the compiler executed against real engines. Included in the
+            default run ON PURPOSE — each driver SKIPS with a reason when it is
+            not configured or not answering, so "3 of 4 engines were not tested"
+            stays visible instead of being a suite nobody remembers to run.
+            Configure with LETMIGRATE_DB_MYSQL / _PGSQL / _SQLSRV (GROUND_DB_*
+            is honoured too); SQLite needs nothing.
+        -->
+        <testsuite name="Live">
+            <directory>tests/Live</directory>
+        </testsuite>
     </testsuites>
 
     <source>
