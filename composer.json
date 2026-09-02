@@ -48,34 +48,41 @@
     "sort-packages": true
   },
   "scripts": {
-    "test":          "phpunit --no-coverage",
-    "test:unit":     "phpunit --testsuite Unit --no-coverage",
-    "test:int":      "phpunit --testsuite Integration --no-coverage",
+    "test": "phpunit --no-coverage",
+    "test:unit": "phpunit --testsuite Unit --no-coverage",
+    "test:int": "phpunit --testsuite Integration --no-coverage",
+    "test:live": "phpunit --testsuite Live --no-coverage --display-skipped",
     "test:cmd:unit": "phpunit --testsuite Commands.Unit --no-coverage",
-    "test:cmd:int":  "phpunit --testsuite Commands.Integration --no-coverage",
-    "test:all":      "phpunit --testsuite All --no-coverage",
-    "test:cover":    "phpunit --coverage-html build/coverage/html --coverage-clover build/coverage/clover.xml",
-    "phpstan":       "phpstan analyse --memory-limit=256M",
-    "stan":          "@phpstan",
-    "cs-check":      "php-cs-fixer fix --dry-run --diff --config=.php-cs-fixer.php",
-    "cs-fix":        "php-cs-fixer fix --config=.php-cs-fixer.php",
+    "test:cmd:int": "phpunit --testsuite Commands.Integration --no-coverage",
+    "test:all": "phpunit --testsuite All --no-coverage",
+    "test:cover": "phpunit --coverage-html build/coverage/html --coverage-clover build/coverage/clover.xml",
+    "phpstan": "phpstan analyse --memory-limit=256M",
+    "stan": "@phpstan",
+    "cs-check": "php-cs-fixer fix --dry-run --diff --config=.php-cs-fixer.php",
+    "cs-fix": "php-cs-fixer fix --config=.php-cs-fixer.php",
     "check": [
       "@cs-check",
       "@phpstan",
       "@test:all"
+    ],
+    "post-install-cmd": [
+      "git config core.hooksPath .githooks || true"
+    ],
+    "post-update-cmd": [
+      "git config core.hooksPath .githooks || true"
     ]
   },
   "scripts-descriptions": {
-    "test":          "Run core library tests (Unit + Integration)",
-    "test:unit":     "Run Unit tests only (no DB needed)",
-    "test:int":      "Run Integration tests (requires SQLite)",
+    "test": "Run core library tests (Unit + Integration)",
+    "test:unit": "Run Unit tests only (no DB needed)",
+    "test:int": "Run Integration tests (requires SQLite)",
     "test:cmd:unit": "Run migration command unit tests",
-    "test:cmd:int":  "Run migration command integration tests (real SQLite)",
-    "test:all":      "Run every test including command tests",
-    "test:cover":    "Run tests + generate HTML coverage report",
-    "phpstan":       "PHPStan static analysis at level 8",
-    "cs-check":      "Check code style (dry-run)",
-    "cs-fix":        "Apply PHP CS Fixer rules",
-    "check":         "cs-check + phpstan + all tests (full CI gate)"
+    "test:cmd:int": "Run migration command integration tests (real SQLite)",
+    "test:all": "Run every test including command tests",
+    "test:cover": "Run tests + generate HTML coverage report",
+    "phpstan": "PHPStan static analysis at level 8",
+    "cs-check": "Check code style (dry-run)",
+    "cs-fix": "Apply PHP CS Fixer rules",
+    "check": "cs-check + phpstan + all tests (full CI gate)"
   }
 }
