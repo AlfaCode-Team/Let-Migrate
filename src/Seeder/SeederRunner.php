@@ -170,8 +170,20 @@ final class SeederRunner
             sort($files);
 
             foreach ($files as $file) {
-                $name    = basename($file, '.php');
-                $seeder  = require $file;
+                $name = basename($file, '.php');
+
+                // `require` EXECUTES the file, so a seeder declaring a named
+                // class can only be loaded once per process. Resolving the same
+                // directory a second time — which happens whenever one run
+                // seeds more than one database, as `hkm ground migrate` does
+                // per driver — then dies with "Cannot redeclare class".
+                //
+                // By that point the class is already in memory, so the file
+                // does not need executing again: skip straight to instantiating
+                // it below. Files of the `return new class {...}` style declare
+                // no named class, so class_exists() is false for them and they
+                // are required every time, as they must be.
+                $seeder = class_exists($name, autoload: false) ? null : require $file;
 
                 // Two supported file styles:
                 //   1. `return new MySeeder();` / `return new class ... {}`
