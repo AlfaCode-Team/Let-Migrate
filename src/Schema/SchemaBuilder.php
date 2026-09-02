@@ -8,6 +8,8 @@ use AlfaCode\LetMigrate\Contract\DatabaseDriverInterface;
 use AlfaCode\LetMigrate\Contract\SchemaBuilderInterface;
 use AlfaCode\LetMigrate\Contract\SchemaInspectorInterface;
 use AlfaCode\LetMigrate\Driver\SQLite\SQLiteGrammar;
+use AlfaCode\LetMigrate\Exception\MigrationException;
+use AlfaCode\LetMigrate\Schema\Inspector\ColumnMeta;
 
 /**
  * Concrete schema builder.
@@ -82,55 +84,25 @@ final class SchemaBuilder implements SchemaBuilderInterface
         $callback($blueprint);
         $this->prefixBlueprintForeignKeys($blueprint);
 
-        // ── S-01: SQLite cannot ALTER/MODIFY a column in place ──
-        // When the blueprint contains modified columns and we are on
-        // SQLite, use the full recreate-table workaround and execute
-        // each statement on its own — never as a joined multi-statement
-        // string (PDO::exec() would run only the first statement).
+        // ── SQLite cannot ALTER/MODIFY a column in place ──
+        //
+        // SQLite's documented workaround is to rebuild the table: create a new
+        // one with the desired shape, copy the rows across, drop the original
+        // and rename. That needs the COMPLETE table definition — and an ALTER
+        // blueprint holds only the DELTA. Handing the delta straight to
+        // compileRecreateTable() compiled `CREATE TABLE "__tmp_users" ()` and
+        // died on "near \")\": syntax error", because a modifyColumn-only
+        // blueprint has no getColumns() at all.
+        //
+        // The missing half lives in the database, so the inspector supplies it:
+        // read the existing columns and indexes, apply the delta on top, and
+        // rebuild from the union. Dropping a table drops its indexes with it,
+        // so those are carried across too or they vanish silently.
         if (
             $this->grammar instanceof SQLiteGrammar
-            && method_exists($blueprint, 'getModifiedColumns')
             && !empty($blueprint->getModifiedColumns())
         ) {
-            $existing  = $this->inspector?->getColumns($table) ?? [];
-            $oldNames  = array_map(
-                static fn($c) => is_object($c) ? $c->name : (string) $c,
-                $existing,
-            );
-            $newNames  = array_map(
-                static fn($c) => $c->getName(),
-                $blueprint->getColumns(),
-            );
-
-            // Columns that survive into the new table = intersection of
-            // old names and new names, preserving the new table order.
-            $carryNames = array_values(array_intersect($newNames, $oldNames));
-            if ($carryNames === []) {
-                // Fall back to copying by the new column list when no
-                // inspector is available to tell us the old columns.
-                $carryNames = $newNames;
-            }
-
-            $statements = $this->grammar->compileRecreateTable(
-                $blueprint,
-                $carryNames,
-                $carryNames,
-            );
-
-            $this->driver->execute($this->grammar->compileForeignKeyChecksOff());
-
-            try {
-                foreach ($statements as $sql) {
-                    $this->driver->execute($sql);
-                }
-            } finally {
-                $this->driver->execute($this->grammar->compileForeignKeyChecksOn());
-            }
-
-            // Post-alter statements still apply (e.g. triggers).
-            foreach ($this->grammar->compilePostCreate($blueprint) as $postSql) {
-                $this->driver->execute($postSql);
-            }
+            $this->recreateSqliteTable($table, $blueprint);
 
             return;
         }
@@ -144,6 +116,166 @@ final class SchemaBuilder implements SchemaBuilderInterface
         foreach ($this->grammar->compilePostCreate($blueprint) as $postSql) {
             $this->driver->execute($postSql);
         }
+    }
+
+    /**
+     * Rebuild a SQLite table so a column can be modified.
+     *
+     * @param string    $table     unprefixed table name (as the caller wrote it)
+     * @param Blueprint $delta     the ALTER blueprint — only what changed
+     */
+    private function recreateSqliteTable(string $table, Blueprint $delta): void
+    {
+        if ($this->inspector === null) {
+            throw new MigrationException(sprintf(
+                'Modifying the column(s) %s on "%s" requires rebuilding the table, '
+                . 'which needs the existing definition — but this SchemaBuilder was '
+                . 'constructed without a SchemaInspector. Pass a SQLiteSchemaInspector, '
+                . 'or branch on the driver in the migration.',
+                implode(', ', array_map(
+                    static fn(ColumnDefinition $c): string => $c->getName(),
+                    $delta->getModifiedColumns(),
+                )),
+                $table,
+            ));
+        }
+
+        $physical = $this->prefixer->prefix($table);
+        $existing = $this->inspector->getColumns($table);
+
+        if ($existing === []) {
+            throw new MigrationException(sprintf(
+                'Cannot modify a column on "%s": the table reports no columns, so the '
+                . 'rebuild SQLite requires has nothing to copy. Does the table exist?',
+                $table,
+            ));
+        }
+
+        $modified = [];
+        foreach ($delta->getModifiedColumns() as $col) {
+            $modified[$col->getName()] = $col;
+        }
+
+        $dropped = array_flip($delta->getDroppedColumns());
+        $renamed = $delta->getRenamedColumns();
+
+        $full       = new Blueprint($physical);
+        $carryOld   = [];   // names to SELECT from the original table
+        $carryNew   = [];   // names to INSERT into the rebuilt one
+
+        foreach ($existing as $meta) {
+            if (isset($dropped[$meta->name])) {
+                continue;
+            }
+
+            $newName = $renamed[$meta->name] ?? $meta->name;
+
+            // A modified column is respelled by the migration; everything else
+            // is carried over exactly as the database reports it.
+            $full->addColumnDefinition(
+                isset($modified[$meta->name])
+                    ? $modified[$meta->name]
+                    : $this->columnFromMeta($meta, $newName),
+            );
+
+            $carryOld[] = $meta->name;
+            $carryNew[] = $newName;
+        }
+
+        // Columns this same ALTER adds. They have no data to copy, so they stay
+        // out of the INSERT column list — a NOT NULL one without a default will
+        // be refused by SQLite, which is correct and worth surfacing.
+        foreach ($delta->getColumns() as $col) {
+            $full->addColumnDefinition($col);
+        }
+
+        // Indexes: the ones already on the table, plus any this ALTER declares.
+        // Skip SQLite's auto-created ones — they belong to a UNIQUE/PK
+        // constraint that the rebuilt CREATE TABLE re-declares itself.
+        $keep = array_flip($carryNew);
+        foreach ($this->inspector->getIndexes($table) as $idx) {
+            if ($idx->primary || str_starts_with($idx->name, 'sqlite_autoindex')) {
+                continue;
+            }
+
+            $cols = array_values(array_filter(
+                array_map(static fn(string $c): string => $renamed[$c] ?? $c, $idx->columns),
+                static fn(string $c): bool => isset($keep[$c]),
+            ));
+
+            if ($cols === [] || count($cols) !== count($idx->columns)) {
+                continue;   // the index lost a column to this ALTER
+            }
+
+            $idx->unique
+                ? $full->unique($cols, $idx->name)
+                : $full->index($cols, $idx->name);
+        }
+
+        foreach ($delta->getIndexes() as $idx) {
+            $full->addIndexDefinition($idx);
+        }
+
+        $statements = $this->grammar->compileRecreateTable($full, $carryOld, $carryNew);
+
+        $this->driver->execute($this->grammar->compileForeignKeyChecksOff());
+
+        try {
+            foreach ($statements as $sql) {
+                $this->driver->execute($sql);
+            }
+        } finally {
+            $this->driver->execute($this->grammar->compileForeignKeyChecksOn());
+        }
+
+        foreach ($this->grammar->compilePostCreate($full) as $postSql) {
+            $this->driver->execute($postSql);
+        }
+    }
+
+    /**
+     * Rebuild a ColumnDefinition from what the database reports.
+     *
+     * The DEFAULT arrives as a raw SQL literal — PRAGMA hands back `'active'`
+     * WITH its quotes — so it is unwrapped back to a PHP value here. Passing
+     * the literal through untouched would re-quote it on the way out and turn
+     * `'active'` into `'\'active\''` on every rebuild.
+     */
+    private function columnFromMeta(ColumnMeta $meta, string $name): ColumnDefinition
+    {
+        $col = new ColumnDefinition($name, strtoupper($meta->type) ?: 'TEXT');
+
+        $meta->nullable ? $col->nullable() : $col->notNull();
+
+        if ($meta->primaryKey) {
+            $col->primary();
+        }
+
+        if ($meta->autoIncrement) {
+            $col->autoIncrement();
+        }
+
+        if ($meta->default !== null) {
+            $col->default($this->unwrapSqlLiteral($meta->default));
+        }
+
+        return $col;
+    }
+
+    /** `'active'` → `active`, `0` → `0`, `CURRENT_TIMESTAMP` → itself. */
+    private function unwrapSqlLiteral(string $literal): mixed
+    {
+        $trimmed = trim($literal);
+
+        if (strlen($trimmed) >= 2 && str_starts_with($trimmed, "'") && str_ends_with($trimmed, "'")) {
+            return str_replace("''", "'", substr($trimmed, 1, -1));
+        }
+
+        if (is_numeric($trimmed)) {
+            return str_contains($trimmed, '.') ? (float) $trimmed : (int) $trimmed;
+        }
+
+        return $trimmed;   // CURRENT_TIMESTAMP and friends — wrapDefault allowlists them
     }
 
     public function drop(string $table): void
