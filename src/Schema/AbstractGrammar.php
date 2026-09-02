@@ -63,19 +63,29 @@ abstract class AbstractGrammar implements GrammarInterface
         $table = $this->quoteIdentifier($blueprint->getTable());
         $clauses = [];
 
-        // Dropped columns
-        foreach ($blueprint->getDroppedColumns() as $col) {
-            $clauses[] = "ALTER TABLE {$table} DROP COLUMN {$this->quoteIdentifier($col)}";
+        // Drops run DEPENDENTS FIRST: foreign keys, then indexes, then the
+        // columns underneath them.
+        //
+        // Dropping columns first is what MySQL tolerates, because it silently
+        // drops any single-column index over a column being removed — and then
+        // the DROP INDEX that follows fails, because the index is already gone.
+        // Every other engine refuses the first statement instead: SQLite
+        // answers "error in index ... after drop column: no such column".
+        //
+        // So a rollback written in the correct order — dropIndex(), then
+        // dropColumn() — must not be REORDERED by this compiler into one that
+        // cannot work anywhere but MySQL, in the one direction nobody runs
+        // until they uninstall a plugin.
+        foreach ($blueprint->getDroppedForeignKeys() as $fk) {
+            $clauses[] = $this->compileDropForeignKey($table, $fk);
         }
 
-        // Dropped indexes
         foreach ($blueprint->getDroppedIndexes() as $idx) {
             $clauses[] = $this->compileDropIndex($table, $idx);
         }
 
-        // Dropped foreign keys
-        foreach ($blueprint->getDroppedForeignKeys() as $fk) {
-            $clauses[] = $this->compileDropForeignKey($table, $fk);
+        foreach ($blueprint->getDroppedColumns() as $col) {
+            $clauses[] = "ALTER TABLE {$table} DROP COLUMN {$this->quoteIdentifier($col)}";
         }
 
         // Modified columns
@@ -88,25 +98,46 @@ abstract class AbstractGrammar implements GrammarInterface
             $clauses[] = $this->compileRenameColumn($table, $from, $to);
         }
 
-        // New columns
+        // New columns.
+        //
+        // Batching several ADD clauses into ONE `ALTER TABLE t ADD COLUMN a,
+        // ADD COLUMN b` is MySQL syntax. SQLite, PostgreSQL and SQL Server all
+        // reject it — SQLite takes exactly one ADD COLUMN per statement — so
+        // emitting it unconditionally means "add two columns to an existing
+        // table" compiles fine and fails on every engine but MySQL. Nothing in
+        // a unit test catches that: a fake records SQL, it does not parse it.
         $addClauses = [];
         foreach ($blueprint->getColumns() as $col) {
-            $addClauses[] = 'ADD COLUMN ' . $this->compileColumn($col);
+            $addClauses[] = $this->addColumnKeyword() . ' ' . $this->compileColumn($col);
         }
 
-        // New indexes
-        foreach ($blueprint->getIndexes() as $idx) {
-            $addClauses[] = 'ADD ' . $this->compileIndex($idx);
-        }
-
-        // New foreign keys
+        // New foreign keys ride along with the columns: `ADD CONSTRAINT` is
+        // standard and every engine that supports it accepts it here.
         foreach ($blueprint->getForeignKeys() as $fk) {
             $addClauses[] = 'ADD ' . $this->compileForeignKey($fk);
         }
 
-        if (!empty($addClauses)) {
-            $clauses[] = 'ALTER TABLE ' . $table . PHP_EOL
-                . '    ' . implode(',' . PHP_EOL . '    ', $addClauses);
+        if ($addClauses !== []) {
+            if ($this->supportsMultiClauseAlter()) {
+                $clauses[] = 'ALTER TABLE ' . $table . PHP_EOL
+                    . '    ' . implode(',' . PHP_EOL . '    ', $addClauses);
+            } else {
+                foreach ($addClauses as $clause) {
+                    $clauses[] = 'ALTER TABLE ' . $table . ' ' . $clause;
+                }
+            }
+        }
+
+        // New indexes. `ADD KEY` inside ALTER TABLE is MySQL-only; everywhere
+        // else an index is its own CREATE INDEX statement.
+        foreach ($blueprint->getIndexes() as $idx) {
+            if ($idx->getType() === 'primary') {
+                continue; // a primary key is part of the table, not an add-on
+            }
+
+            $clauses[] = $this->supportsInlineIndexInAlter()
+                ? 'ALTER TABLE ' . $table . ' ADD ' . $this->compileIndex($idx)
+                : $this->compileCreateIndex($table, $idx);
         }
 
         $suffix = $this->alterSuffix($blueprint);
@@ -121,6 +152,47 @@ abstract class AbstractGrammar implements GrammarInterface
         }
 
         return $clauses;
+    }
+
+    /**
+     * May several ADD clauses share one ALTER TABLE?
+     *
+     * Only MySQL. The portable default is one statement per change, which every
+     * engine accepts — including MySQL, so a grammar that forgets to opt in is
+     * slower, never wrong.
+     */
+    protected function supportsMultiClauseAlter(): bool
+    {
+        return false;
+    }
+
+    /** May an index be added with `ALTER TABLE ... ADD KEY`? MySQL only. */
+    protected function supportsInlineIndexInAlter(): bool
+    {
+        return false;
+    }
+
+    /**
+     * How this dialect spells "add a column" inside ALTER TABLE.
+     *
+     * `ADD COLUMN` is the ANSI spelling and what MySQL, PostgreSQL and SQLite
+     * take. T-SQL does NOT accept the COLUMN keyword here — SQL Server answers
+     * "Incorrect syntax near the keyword 'COLUMN'" — so it overrides this with
+     * a bare `ADD`.
+     */
+    protected function addColumnKeyword(): string
+    {
+        return 'ADD COLUMN';
+    }
+
+    /** A standalone index, for the engines that cannot add one inside ALTER. */
+    protected function compileCreateIndex(string $quotedTable, mixed $idx): string
+    {
+        $cols   = implode(', ', array_map([$this, 'quoteIdentifier'], $idx->getColumns()));
+        $name   = $this->quoteIdentifier($idx->getName());
+        $unique = $idx->getType() === 'unique' ? 'UNIQUE ' : '';
+
+        return "CREATE {$unique}INDEX {$name} ON {$quotedTable} ({$cols})";
     }
 
     public function compileDrop(string $table): string
@@ -422,10 +494,10 @@ abstract class AbstractGrammar implements GrammarInterface
         $sql = "{$name}FOREIGN KEY ({$col}) REFERENCES {$on} ({$ref})";
 
         if ($fk->getOnDelete() !== '') {
-            $sql .= ' ON DELETE ' . $fk->getOnDelete();
+            $sql .= ' ON DELETE ' . $this->mapReferentialAction($fk->getOnDelete());
         }
         if ($fk->getOnUpdate() !== '') {
-            $sql .= ' ON UPDATE ' . $fk->getOnUpdate();
+            $sql .= ' ON UPDATE ' . $this->mapReferentialAction($fk->getOnUpdate());
         }
 
         // at the END of compileForeignKey(), before `return $sql;`
@@ -436,6 +508,19 @@ if ($this->supportsDeferrable && $fk->isDeferrable()) {
         : ' INITIALLY IMMEDIATE';
 }
         return $sql;
+    }
+
+    /**
+     * Translate a referential action to what this dialect accepts.
+     *
+     * RESTRICT is ANSI and is taken verbatim by MySQL, PostgreSQL and SQLite.
+     * SQL Server supports only NO ACTION / CASCADE / SET NULL / SET DEFAULT
+     * and rejects RESTRICT outright, so it maps. The identity default keeps
+     * every other grammar exactly as it was.
+     */
+    protected function mapReferentialAction(string $action): string
+    {
+        return $action;
     }
 
     protected function compileDropIndex(string $quotedTable, string $indexName): string

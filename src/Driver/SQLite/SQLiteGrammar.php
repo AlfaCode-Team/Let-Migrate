@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace AlfaCode\LetMigrate\Driver\SQLite;
 
+use AlfaCode\LetMigrate\Exception\MigrationException;
 use AlfaCode\LetMigrate\Schema\AbstractGrammar;
 use AlfaCode\LetMigrate\Schema\Blueprint;
 use AlfaCode\LetMigrate\Schema\ColumnDefinition;
@@ -46,6 +47,46 @@ final class SQLiteGrammar extends AbstractGrammar
     \"batch\"      INTEGER NOT NULL DEFAULT 1,
     \"applied_at\" TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
 )";
+    }
+
+    /**
+     * SQLite cannot add a FOREIGN KEY to a table that already exists.
+     *
+     * There is no `ALTER TABLE ... ADD CONSTRAINT` in SQLite at all: a foreign
+     * key can only be declared inside `CREATE TABLE`. Compiling one anyway
+     * produces `near "FOREIGN": syntax error`, which names the token SQLite
+     * choked on and nothing about why — so the reader goes looking for a typo
+     * in a statement that is perfectly good ANSI SQL and simply cannot exist
+     * here.
+     *
+     * Rewriting it automatically is not available at this layer. The 12-step
+     * rebuild is implemented (compileRecreateTable), but it needs the COMPLETE
+     * desired table definition, and an ALTER blueprint holds only the delta —
+     * recovering the rest means introspecting the live table, which a grammar,
+     * being a pure SQL compiler with no connection, cannot do.
+     *
+     * So this fails early and says what to do instead. The migration is the
+     * thing that has to change: declare the key in the CREATE TABLE that makes
+     * the column, or branch on the driver.
+     */
+    public function compileAlter(Blueprint $blueprint): array
+    {
+        if ($blueprint->getForeignKeys() !== []) {
+            $keys = [];
+
+            foreach ($blueprint->getForeignKeys() as $fk) {
+                $keys[] = sprintf('%s -> %s', $fk->getColumn(), $fk->getReferencedTable());
+            }
+
+            throw new MigrationException(sprintf(
+                'SQLite cannot add a foreign key to the existing table "%s" (%s). '
+                . 'Declare it in the CREATE TABLE that creates the column, or skip it for this driver.',
+                $blueprint->getTable(),
+                implode(', ', $keys),
+            ));
+        }
+
+        return parent::compileAlter($blueprint);
     }
 
     public function compileRename(string $from, string $to): string
@@ -138,30 +179,35 @@ final class SQLiteGrammar extends AbstractGrammar
      * should call disableForeignKeyChecks() before and enableForeignKeyChecks()
      * after the ALTER TABLE session when modifyColumn() is used on SQLite.
      */
+    /**
+     * A column cannot be modified from the grammar alone.
+     *
+     * SQLite has no `ALTER TABLE ... MODIFY/ALTER COLUMN`; the documented
+     * workaround is to rebuild the table, and a rebuild needs the COMPLETE
+     * definition. A grammar is a pure SQL compiler with no connection, and the
+     * ALTER blueprint it is handed holds only the DELTA — so the other columns,
+     * the ones that must survive, are not knowable here.
+     *
+     * This used to return a four-statement string joined by ';' that recreated
+     * the table with ONLY the modified column: every other column and its data
+     * dropped, in a single clause that most drivers would refuse to prepare
+     * anyway. Refusing is strictly better than a plausible-looking statement
+     * whose effect is data loss.
+     *
+     * The supported route is SchemaBuilder::table(), which reads the existing
+     * definition from a SchemaInspector, applies the delta, and drives
+     * compileRecreateTable() with the full picture.
+     */
     protected function compileModifyColumn(string $quotedTable, ColumnDefinition $col): string
     {
-        // Extract raw table name from the quoted identifier for the tmp name
-        $rawTable = trim($quotedTable, '"');
-        $tmpTable = $this->quoteIdentifier("__tmp_{$rawTable}");
-
-        // Build a minimal blueprint for the recreated column in the temp table.
-        // In practice SchemaBuilder should pass the full table blueprint here —
-        // but since AbstractGrammar only passes a single ColumnDefinition, we
-        // emit the single-column version and note that SchemaBuilder should
-        // call compileRecreateTable() with the full Blueprint for accuracy.
-        $colDdl = $this->compileColumn($col);
-
-        return implode(";\n", [
-            // Step 1 — create tmp with new column schema (single column shown here;
-            // SchemaBuilder should use compileRecreateTable for full-table accuracy)
-            "CREATE TABLE {$tmpTable} ({$colDdl})",
-            // Step 2 — copy existing data (old column name = new column name assumed)
-            "INSERT INTO {$tmpTable} SELECT {$this->quoteIdentifier($col->getName())} FROM {$quotedTable}",
-            // Step 3 — drop old table
-            "DROP TABLE {$quotedTable}",
-            // Step 4 — rename tmp to original
-            "ALTER TABLE {$tmpTable} RENAME TO {$this->quoteIdentifier($rawTable)}",
-        ]);
+        throw new MigrationException(sprintf(
+            'SQLite cannot modify the column "%s" on %s in place, and rebuilding the table '
+            . 'needs its full definition, which a grammar cannot read. Route this through '
+            . 'SchemaBuilder::table() with a SchemaInspector, or call compileRecreateTable() '
+            . 'with the complete Blueprint.',
+            $col->getName(),
+            trim($quotedTable, '"'),
+        ));
     }
 
     /**
