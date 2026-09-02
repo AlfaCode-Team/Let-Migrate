@@ -87,6 +87,38 @@ CREATE TABLE {$t} (
         return implode(' ', array_filter($parts));
     }
 
+    /**
+     * T-SQL has no COLUMN keyword in `ALTER TABLE ... ADD`.
+     *
+     *     ALTER TABLE [users] ADD COLUMN [nickname] NVARCHAR(40)   -- error
+     *     ALTER TABLE [users] ADD [nickname] NVARCHAR(40)          -- correct
+     *
+     * SQL Server answers "Incorrect syntax near the keyword 'COLUMN'", which
+     * points at a statement that is valid ANSI SQL on all three other engines.
+     */
+    protected function addColumnKeyword(): string
+    {
+        return 'ADD';
+    }
+
+    /**
+     * SQL Server has no RESTRICT.
+     *
+     * Its referential actions are NO ACTION, CASCADE, SET NULL and SET DEFAULT
+     * only; RESTRICT — the default this engine emits, and ANSI everywhere else
+     * — is a syntax error. NO ACTION is the T-SQL equivalent: both refuse the
+     * parent-row change when a child row references it. (The ANSI distinction
+     * is that RESTRICT checks immediately and NO ACTION may defer to end of
+     * statement; SQL Server does not implement deferred constraint checking at
+     * all, so nothing is lost in the mapping.)
+     */
+    protected function mapReferentialAction(string $action): string
+    {
+        return strcasecmp(trim($action), 'RESTRICT') === 0
+            ? 'NO ACTION'
+            : $action;
+    }
+
     protected function autoIncrementKeyword(): string
     {
         return ''; // SQL Server uses IDENTITY(1,1) in the type
