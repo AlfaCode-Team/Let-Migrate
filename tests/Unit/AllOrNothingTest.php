@@ -37,13 +37,23 @@ final class AllOrNothingTest extends TestCase
     }
 
     /**
+     * The two recorders are ArrayObjects, NOT arrays, and that is load-bearing.
+     *
+     * `[$runner, $txLog] = $this->make(...)` copies the array element by VALUE
+     * at the moment of destructuring — before run() is ever called — so a
+     * plain array recorder handed back this way is a SNAPSHOT of the empty
+     * list, and stays empty however many times the closures append to the
+     * local inside make(). Binding it with `&` does not help either: PHP
+     * cannot take a reference to a function's return value. An object is a
+     * handle, so the caller and the closures see the same thing.
+     *
      * @param array<string,MigrationInterface> $pending
-     * @return array{0:MigrationRunner,1:array,2:array} runner, txLog, logged
+     * @return array{0:MigrationRunner,1:\ArrayObject,2:\ArrayObject} runner, txLog, logged
      */
     private function make(array $pending, bool $allOrNothing): array
     {
-        $txLog  = [];
-        $logged = [];
+        $txLog  = new \ArrayObject();
+        $logged = new \ArrayObject();
 
         $repo = $this->createStub(MigrationRepositoryInterface::class);
         $repo->method('ensureTable')->willReturnCallback(fn() => null);
@@ -51,21 +61,32 @@ final class AllOrNothingTest extends TestCase
         $repo->method('lastBatch')->willReturn(0);
         $repo->method('all')->willReturn([]);
         $repo->method('log')->willReturnCallback(
-            function (string $f) use (&$logged) { $logged[] = $f; },
+            function (string $f) use ($logged) { $logged->append($f); },
         );
 
         $resolver = $this->createStub(MigrationResolverInterface::class);
         $resolver->method('resolve')->willReturn($pending);
 
+        // The stub must TRACK whether a transaction is open, not just record
+        // the calls. MigrationRunner guards its commit with
+        // `if ($driver->inTransaction())` — because DDL implicitly commits on
+        // MySQL and SQL Server, closing the transaction underneath it — so a
+        // stub whose inTransaction() answers the type-default `false` models
+        // no real driver and silently swallows every commit.
+        $open = new \ArrayObject(['tx' => false]);
+
         $driver = $this->createStub(DatabaseDriverInterface::class);
         $driver->method('beginTransaction')->willReturnCallback(
-            function () use (&$txLog) { $txLog[] = 'begin'; },
+            function () use ($txLog, $open) { $txLog->append('begin'); $open['tx'] = true; },
         );
         $driver->method('commit')->willReturnCallback(
-            function () use (&$txLog) { $txLog[] = 'commit'; },
+            function () use ($txLog, $open) { $txLog->append('commit'); $open['tx'] = false; },
         );
         $driver->method('rollback')->willReturnCallback(
-            function () use (&$txLog) { $txLog[] = 'rollback'; },
+            function () use ($txLog, $open) { $txLog->append('rollback'); $open['tx'] = false; },
+        );
+        $driver->method('inTransaction')->willReturnCallback(
+            static fn(): bool => (bool) $open['tx'],
         );
 
         $schema = $this->createStub(SchemaBuilderInterface::class);
@@ -79,7 +100,7 @@ final class AllOrNothingTest extends TestCase
             allOrNothing:  $allOrNothing,
         );
 
-        return [$runner, &$txLog, &$logged];
+        return [$runner, $txLog, $logged];
     }
 
     public function test_default_uses_one_transaction_per_migration(): void
@@ -95,7 +116,7 @@ final class AllOrNothingTest extends TestCase
         // 3 migrations → 3 begin/commit pairs
         $this->assertSame(
             ['begin', 'commit', 'begin', 'commit', 'begin', 'commit'],
-            $txLog,
+            $txLog->getArrayCopy(),
         );
     }
 
@@ -110,8 +131,8 @@ final class AllOrNothingTest extends TestCase
         $runner->run();
 
         // exactly one begin + one commit for the whole batch
-        $this->assertSame(['begin', 'commit'], $txLog);
-        $this->assertSame(['m1', 'm2', 'm3'], $logged);
+        $this->assertSame(['begin', 'commit'], $txLog->getArrayCopy());
+        $this->assertSame(['m1', 'm2', 'm3'], $logged->getArrayCopy());
     }
 
     public function test_all_or_nothing_rolls_back_entire_batch_on_failure(): void
@@ -130,12 +151,12 @@ final class AllOrNothingTest extends TestCase
             $this->assertStringContainsString('m2', $e->getMessage());
         }
 
-        $this->assertSame(['begin', 'rollback'], $txLog);
+        $this->assertSame(['begin', 'rollback'], $txLog->getArrayCopy());
         // m1 was logged before m2 failed, but the single rollback undoes
         // the DB transaction; the repository->log() calls happened inside
         // it, so from the DB's perspective nothing persisted. The stub
         // records the call ordering — we assert no commit occurred:
-        $this->assertNotContains('commit', $txLog);
+        $this->assertNotContains('commit', $txLog->getArrayCopy());
     }
 
     public function test_pretend_disables_batch_transaction(): void
@@ -152,7 +173,7 @@ final class AllOrNothingTest extends TestCase
 
         $driver = $this->createStub(DatabaseDriverInterface::class);
         $driver->method('beginTransaction')->willReturnCallback(
-            function () use (&$txLog) { $txLog[] = 'begin'; },
+            function () use ($txLog) { $txLog->append('begin'); },
         );
 
         $schema = $this->createStub(SchemaBuilderInterface::class);

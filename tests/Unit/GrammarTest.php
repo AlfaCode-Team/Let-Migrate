@@ -9,6 +9,7 @@ use AlfaCode\LetMigrate\Driver\PostgreSQL\PostgreSQLGrammar;
 use AlfaCode\LetMigrate\Driver\SQLite\SQLiteGrammar;
 use AlfaCode\LetMigrate\Driver\SQLServer\SQLServerGrammar;
 use AlfaCode\LetMigrate\Schema\Blueprint;
+use AlfaCode\LetMigrate\Schema\ColumnDefinition;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
@@ -329,6 +330,275 @@ final class GrammarTest extends TestCase
     }
 
     // ── Helpers ───────────────────────────────────────────────────
+
+    // ── Boolean defaults, per driver ──────────────────────────────
+
+    /**
+     * PostgreSQL rejects `BOOLEAN ... DEFAULT 1` outright:
+     *
+     *     ERROR: column "flag" is of type boolean but default expression
+     *            is of type integer
+     *
+     * MySQL and SQLite accept it, so a bool default compiled to 1/0 for every
+     * driver looks correct everywhere it is tested and breaks on the one
+     * driver nobody runs locally.
+     */
+    public function test_postgres_emits_boolean_keywords_for_a_bool_default(): void
+    {
+        $grammar = new PostgreSQLGrammar();
+
+        $this->assertSame('TRUE', $grammar->wrapDefault(true));
+        $this->assertSame('FALSE', $grammar->wrapDefault(false));
+    }
+
+    public function test_postgres_boolean_column_default_reaches_the_ddl(): void
+    {
+        $bp = new Blueprint('settings');
+        $bp->id();
+        $bp->boolean('show_phone')->default(true);
+        $bp->boolean('is_admin')->default(false);
+
+        $sql = (new PostgreSQLGrammar())->compileCreate($bp);
+
+        $this->assertStringContainsString('DEFAULT TRUE', $sql);
+        $this->assertStringContainsString('DEFAULT FALSE', $sql);
+        $this->assertStringNotContainsString('DEFAULT 1', $sql);
+        $this->assertStringNotContainsString('DEFAULT 0', $sql);
+    }
+
+    /** SQL Server's BIT takes 1/0 and rejects TRUE/FALSE — it must NOT follow Postgres. */
+    public function test_other_drivers_keep_integer_boolean_defaults(): void
+    {
+        foreach ([new MySQLGrammar(), new SQLiteGrammar(), new SQLServerGrammar()] as $grammar) {
+            $this->assertSame('1', $grammar->wrapDefault(true), $grammar::class);
+            $this->assertSame('0', $grammar->wrapDefault(false), $grammar::class);
+        }
+    }
+
+    /** The override must not swallow every other default type on Postgres. */
+    public function test_postgres_still_delegates_non_bool_defaults(): void
+    {
+        $grammar = new PostgreSQLGrammar();
+
+        $this->assertSame('NULL', $grammar->wrapDefault(null));
+        $this->assertSame('42', $grammar->wrapDefault(42));
+        $this->assertSame("'public'", $grammar->wrapDefault('public'));
+    }
+
+    // ── Modify column: one clause must be ONE statement ───────────
+
+    /**
+     * compileAlter() treats every clause it collects as a single statement and
+     * hands it straight to the driver, which prepares it. PostgreSQL's extended
+     * query protocol refuses more than one command in a prepared statement:
+     *
+     *     SQLSTATE[42601]: cannot insert multiple commands into a
+     *     prepared statement
+     *
+     * so a `;`-joined clause could never execute — the migration dies before
+     * applying any DDL at all.
+     */
+    public function test_postgres_modify_column_compiles_to_a_single_statement(): void
+    {
+        $bp = new Blueprint('users');
+        $bp->modifyColumn('password_hash', static fn () => (new ColumnDefinition('password_hash', 'VARCHAR(255)'))->notNull());
+
+        $statements = (new PostgreSQLGrammar())->compileAlter($bp);
+
+        $this->assertCount(1, $statements);
+
+        $sql = $statements[0];
+        $this->assertStringNotContainsString(';', $sql);
+        $this->assertSame(1, substr_count($sql, 'ALTER TABLE'), $sql);
+        $this->assertStringContainsString('ALTER COLUMN "password_hash" TYPE VARCHAR(255)', $sql);
+        $this->assertStringContainsString('ALTER COLUMN "password_hash" SET NOT NULL', $sql);
+        $this->assertStringContainsString('ALTER COLUMN "password_hash" DROP DEFAULT', $sql);
+    }
+
+    public function test_postgres_modify_column_keeps_a_default_and_nullability(): void
+    {
+        $bp = new Blueprint('users');
+        $bp->modifyColumn('status', static fn () => (new ColumnDefinition('status', 'VARCHAR(20)'))->default('active')->nullable());
+
+        $sql = (new PostgreSQLGrammar())->compileAlter($bp)[0];
+
+        $this->assertStringNotContainsString(';', $sql);
+        $this->assertStringContainsString("SET DEFAULT 'active'", $sql);
+        $this->assertStringContainsString('DROP NOT NULL', $sql);
+    }
+
+    // ── Portable ALTER TABLE ──────────────────────────────────────
+
+    /**
+     * Batched `ADD COLUMN a, ADD COLUMN b` and inline `ADD KEY` are MySQL
+     * syntax. SQLite takes exactly one ADD COLUMN per statement and spells an
+     * index as its own CREATE INDEX; PostgreSQL and SQL Server agree with it.
+     */
+    public function test_non_mysql_adds_one_column_per_statement(): void
+    {
+        foreach ([new SQLiteGrammar(), new PostgreSQLGrammar(), new SQLServerGrammar()] as $grammar) {
+            $bp = new Blueprint('users');
+            $bp->string('nickname', 40)->nullable();
+            $bp->string('locale', 8)->nullable();
+
+            $statements = $grammar->compileAlter($bp);
+
+            $this->assertCount(2, $statements, $grammar::class);
+
+            foreach ($statements as $sql) {
+                // One ADD per statement, and never a batched clause list.
+                // The KEYWORD differs by dialect — T-SQL has no COLUMN here —
+                // so count the ADD itself, not the ANSI spelling of it.
+                $this->assertStringNotContainsString(',' . PHP_EOL, $sql, $grammar::class);
+                $this->assertSame(1, preg_match_all('/\\bADD\\b/', $sql), $sql);
+            }
+
+            // Between them the two statements add both columns, once each.
+            $joined = implode(' ', $statements);
+            $this->assertSame(1, substr_count($joined, 'nickname'), $joined);
+            $this->assertSame(1, substr_count($joined, 'locale'), $joined);
+        }
+    }
+
+    /**
+     * T-SQL has no COLUMN keyword in `ALTER TABLE ... ADD`. SQL Server answers
+     * "Incorrect syntax near the keyword 'COLUMN'" — for a statement that is
+     * valid ANSI SQL on all three other engines, which is what makes it easy
+     * to write and hard to spot.
+     */
+    public function test_sqlserver_adds_a_column_without_the_column_keyword(): void
+    {
+        $bp = new Blueprint('users');
+        $bp->string('nickname', 40)->nullable();
+
+        $sql = (new SQLServerGrammar())->compileAlter($bp)[0];
+
+        $this->assertStringContainsString('ADD [nickname]', $sql);
+        $this->assertStringNotContainsString('ADD COLUMN', $sql);
+    }
+
+    /** The other three keep the ANSI spelling. */
+    public function test_ansi_drivers_keep_the_add_column_spelling(): void
+    {
+        foreach ([new MySQLGrammar(), new PostgreSQLGrammar(), new SQLiteGrammar()] as $grammar) {
+            $bp = new Blueprint('users');
+            $bp->string('nickname', 40)->nullable();
+
+            $this->assertStringContainsString(
+                'ADD COLUMN',
+                $grammar->compileAlter($bp)[0],
+                $grammar::class,
+            );
+        }
+    }
+
+    /**
+     * SQL Server has no RESTRICT — its referential actions are NO ACTION,
+     * CASCADE, SET NULL and SET DEFAULT only. RESTRICT is this engine's
+     * default and is ANSI everywhere else, so it must be mapped, not passed
+     * through.
+     */
+    public function test_sqlserver_maps_restrict_to_no_action(): void
+    {
+        $bp = new Blueprint('posts');
+        $bp->foreign('user_id')->references('id')->on('users');
+
+        $sql = (new SQLServerGrammar())->compileAlter($bp)[0];
+
+        $this->assertStringContainsString('ON DELETE NO ACTION', $sql);
+        $this->assertStringContainsString('ON UPDATE NO ACTION', $sql);
+        $this->assertStringNotContainsString('RESTRICT', $sql);
+    }
+
+    /** RESTRICT is ANSI and must survive untouched on the engines that take it. */
+    public function test_other_drivers_keep_restrict(): void
+    {
+        foreach ([new MySQLGrammar(), new PostgreSQLGrammar()] as $grammar) {
+            $bp = new Blueprint('posts');
+            $bp->foreign('user_id')->references('id')->on('users');
+
+            $sql = $grammar->compileAlter($bp)[0];
+
+            $this->assertStringContainsString('ON DELETE RESTRICT', $sql, $grammar::class);
+            $this->assertStringContainsString('ON UPDATE RESTRICT', $sql, $grammar::class);
+        }
+    }
+
+    /** MySQL opts in: one ALTER, several comma-separated ADD clauses. */
+    public function test_mysql_batches_adds_into_one_statement(): void
+    {
+        $bp = new Blueprint('users');
+        $bp->string('nickname', 40)->nullable();
+        $bp->string('locale', 8)->nullable();
+
+        $statements = (new MySQLGrammar())->compileAlter($bp);
+
+        $this->assertCount(1, $statements);
+        $this->assertSame(2, substr_count($statements[0], 'ADD COLUMN'));
+    }
+
+    /** `ADD KEY` is MySQL-only; everywhere else an index is a CREATE INDEX. */
+    public function test_non_mysql_adds_an_index_as_create_index(): void
+    {
+        $bp = new Blueprint('users');
+        $bp->index(['nickname']);
+
+        $statements = (new SQLiteGrammar())->compileAlter($bp);
+
+        $this->assertCount(1, $statements);
+        $this->assertStringStartsWith('CREATE INDEX', $statements[0]);
+        $this->assertStringNotContainsString('ADD KEY', $statements[0]);
+    }
+
+    /**
+     * Drops must run DEPENDENTS FIRST. Dropping the column before the index
+     * over it is tolerated only by MySQL; SQLite answers "error in index ...
+     * after drop column: no such column", so a rollback written correctly —
+     * dropIndex() then dropColumn() — must not be reordered into one that
+     * cannot run.
+     */
+    public function test_drops_run_dependents_before_the_columns_under_them(): void
+    {
+        $bp = new Blueprint('users');
+        $bp->dropIndex('idx_nickname');
+        $bp->dropColumn('nickname');
+
+        $statements = (new SQLiteGrammar())->compileAlter($bp);
+
+        $dropIndex  = null;
+        $dropColumn = null;
+
+        foreach ($statements as $i => $sql) {
+            if (str_contains($sql, 'DROP INDEX')) {
+                $dropIndex = $i;
+            }
+
+            if (str_contains($sql, 'DROP COLUMN')) {
+                $dropColumn = $i;
+            }
+        }
+
+        $this->assertNotNull($dropIndex);
+        $this->assertNotNull($dropColumn);
+        $this->assertLessThan($dropColumn, $dropIndex, implode(' | ', $statements));
+    }
+
+    /**
+     * SQLite has no `ALTER TABLE ... ADD CONSTRAINT` at all. Compiling one
+     * anyway produces `near "FOREIGN": syntax error`, which points at a
+     * statement that is perfectly good ANSI SQL. Refuse it with a message that
+     * names the fix instead.
+     */
+    public function test_sqlite_refuses_a_foreign_key_on_an_existing_table(): void
+    {
+        $bp = new Blueprint('posts');
+        $bp->foreign('user_id')->references('id')->on('users');
+
+        $this->expectException(\AlfaCode\LetMigrate\Exception\MigrationException::class);
+        $this->expectExceptionMessageMatches('/SQLite cannot add a foreign key/');
+
+        (new SQLiteGrammar())->compileAlter($bp);
+    }
 
     private function makeSimpleBlueprint(string $table): Blueprint
     {

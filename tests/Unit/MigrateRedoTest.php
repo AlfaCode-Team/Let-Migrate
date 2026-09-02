@@ -47,12 +47,22 @@ final class MigrateRedoTest extends TestCase
             function () use (&$applied) { return array_values($applied); },
         );
         $repo->method('lastBatch')->willReturnCallback(
-            function () use (&$applied) { return $applied === [] ? 0 : 1; },
+            function () use (&$applied) { return count($applied); },
         );
+
+        // ONE MIGRATION PER BATCH. MigrationRunner::lastApplied() counts a
+        // "step" as a BATCH, so putting all three in batch 1 — as this stub
+        // used to — makes "roll back one step" mean "roll back all three",
+        // and every assertion here about redoing only the LAST migration
+        // describes something the fixture made impossible.
         $repo->method('all')->willReturnCallback(
             function () use (&$applied) {
+                $batch = 0;
+
                 return array_map(
-                    static fn($m) => (object) ['migration' => $m, 'batch' => 1],
+                    static function ($m) use (&$batch) {
+                        return (object) ['migration' => $m, 'batch' => ++$batch];
+                    },
                     array_values($applied),
                 );
             },

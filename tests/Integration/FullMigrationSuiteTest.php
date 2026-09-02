@@ -133,9 +133,21 @@ final class FullMigrationSuiteTest extends TestCase
 
     public function test_rollback_removes_last_batch_tables(): void
     {
-        $this->writeAllMigrations();
+        // TWO batches, deliberately. rollback() undoes the last BATCH — the
+        // Laravel/Phinx semantics this engine implements — so writing all five
+        // migrations and running once put them in ONE batch, and the rollback
+        // correctly removed all five while this test asserted that only the
+        // fifth had gone. Apply 1-4, then 5, so "the last batch" is a batch of
+        // one and the assertions below describe something reachable.
+        $this->writeEditionsMigration();
+        $this->writeContestantsMigration();
+        $this->writeVotingMigration();
+        $this->writePaymentsMigration();
+        $this->makeEngine()->run();          // batch 1 — migrations 1-4
+
+        $this->writeAuditMigration();
         $engine = $this->makeEngine();
-        $engine->run();
+        $engine->run();                      // batch 2 — migration 5
 
         $engine->rollback();
 
@@ -152,10 +164,17 @@ final class FullMigrationSuiteTest extends TestCase
 
     public function test_rollback_decrements_tracking_table(): void
     {
-        $this->writeAllMigrations();
+        // Same two-batch shape — see test_rollback_removes_last_batch_tables.
+        $this->writeEditionsMigration();
+        $this->writeContestantsMigration();
+        $this->writeVotingMigration();
+        $this->writePaymentsMigration();
+        $this->makeEngine()->run();          // batch 1 — four migrations
+
+        $this->writeAuditMigration();
         $engine = $this->makeEngine();
-        $engine->run();
-        $engine->rollback();
+        $engine->run();                      // batch 2 — one migration
+        $engine->rollback();                 // → only batch 2 is undone
 
         $status = $engine->status();
         $applied = array_filter($status, static fn($s) => $s['status'] === 'applied');

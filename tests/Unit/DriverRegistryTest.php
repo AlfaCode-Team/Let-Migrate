@@ -169,10 +169,16 @@ final class DriverRegistryTest extends TestCase
     {
         $customGrammar = new SQLiteGrammar();
 
+        // Register BOTH halves under the SAME name. This used to extend the
+        // grammar as 'mydb_ext2' and then build a registry for 'mydb_ext' —
+        // the driver the previous test registered, which survives in
+        // DriverRegistry's static map — so the assertion compared this
+        // grammar against whatever that other registration resolved to.
+        DriverRegistry::extendDriver('mydb_ext2', static fn($cfg) => new SQLiteDriver(':memory:'));
         DriverRegistry::extendGrammar('mydb_ext2', static fn($cfg) => $customGrammar);
 
         $registry = DriverRegistry::fromConfig([
-            'driver' => 'mydb_ext',
+            'driver' => 'mydb_ext2',
             'database' => ':memory:',
             'paths' => [],
         ]);

@@ -25,6 +25,48 @@ final class BlueprintTest extends TestCase
         $this->assertTrue($cols[0]->isPrimary());
     }
 
+    /**
+     * bigIncrements() is Laravel-parity API that live applications call, so it
+     * must stay an exact synonym of id() — same type, same unsigned/
+     * auto-increment/primary flags. A migration that has already RUN somewhere
+     * cannot be re-spelled.
+     */
+    public function test_big_increments_matches_id(): void
+    {
+        $bp = new Blueprint('users');
+        $bp->bigIncrements();
+        $cols = $bp->getColumns();
+
+        $this->assertCount(1, $cols);
+        $this->assertSame('id', $cols[0]->getName());
+        $this->assertStringContainsString('BIGINT', $cols[0]->getType());
+        $this->assertTrue($cols[0]->isUnsigned());
+        $this->assertTrue($cols[0]->isAutoIncrement());
+        $this->assertTrue($cols[0]->isPrimary());
+    }
+
+    public function test_big_increments_with_custom_name(): void
+    {
+        $bp = new Blueprint('votes');
+        $bp->bigIncrements('VoteID');
+
+        $this->assertSame('VoteID', $bp->getColumns()[0]->getName());
+    }
+
+    /** The two spellings must not be allowed to drift apart. */
+    public function test_big_increments_compiles_identically_to_id(): void
+    {
+        $viaId = new Blueprint('users');
+        $viaId->id('user_id');
+
+        $viaAlias = new Blueprint('users');
+        $viaAlias->bigIncrements('user_id');
+
+        $grammar = new \AlfaCode\LetMigrate\Driver\MySQL\MySQLGrammar();
+
+        $this->assertSame($grammar->compileCreate($viaId), $grammar->compileCreate($viaAlias));
+    }
+
     public function test_id_with_custom_name(): void
     {
         $bp = new Blueprint('votes');
@@ -396,9 +438,15 @@ final class BlueprintTest extends TestCase
         $this->assertSame($bp, $bp->engine('InnoDB'));
         $this->assertSame($bp, $bp->charset('utf8mb4'));
         $this->assertSame($bp, $bp->collation('utf8mb4_unicode_ci'));
-        $this->assertSame($bp, $bp->index(['col'], 'idx'));
-        $this->assertSame($bp, $bp->unique(['col']));
-        $this->assertSame($bp, $bp->primary(['col']));
+        // index()/unique()/primary() deliberately return the IndexDefinition,
+        // NOT the Blueprint: that object carries using('GIN'), where(...) for
+        // a partial index and concurrently() for PostgreSQL's
+        // CREATE INDEX CONCURRENTLY. Handing back $this instead would read
+        // more uniformly and make all three unreachable.
+        $this->assertInstanceOf(IndexDefinition::class, $bp->index(['col'], 'idx'));
+        $this->assertInstanceOf(IndexDefinition::class, $bp->unique(['col']));
+        $this->assertInstanceOf(IndexDefinition::class, $bp->primary(['col']));
+
         $this->assertSame($bp, $bp->dropColumn('col'));
         $this->assertSame($bp, $bp->dropIndex('idx'));
         $this->assertSame($bp, $bp->dropForeign('fk'));

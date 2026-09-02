@@ -37,11 +37,15 @@ final class TransactionlessMigrationTest extends TestCase
 
     /**
      * @param array<string,MigrationInterface> $pending
-     * @return array{0:MigrationRunner,1:array} runner, txLog
+     * txLog is an ArrayObject, not an array: `[$runner, $txLog] = make()`
+     * copies the element by VALUE at destructuring time, so a plain array
+     * recorder is a snapshot of the empty list and never sees an append.
+     *
+     * @return array{0:MigrationRunner,1:\ArrayObject} runner, txLog
      */
     private function make(array $pending, bool $allOrNothing): array
     {
-        $txLog = [];
+        $txLog = new \ArrayObject();
 
         $repo = $this->createStub(MigrationRepositoryInterface::class);
         $repo->method('ensureTable')->willReturnCallback(fn() => null);
@@ -53,15 +57,23 @@ final class TransactionlessMigrationTest extends TestCase
         $resolver = $this->createStub(MigrationResolverInterface::class);
         $resolver->method('resolve')->willReturn($pending);
 
+        // Track the open/closed state too — MigrationRunner guards its commit
+        // with inTransaction(), whose stub type-default (false) would discard
+        // every commit and model no real driver.
+        $open = new \ArrayObject(['tx' => false]);
+
         $driver = $this->createStub(DatabaseDriverInterface::class);
         $driver->method('beginTransaction')->willReturnCallback(
-            function () use (&$txLog) { $txLog[] = 'begin'; },
+            function () use ($txLog, $open) { $txLog->append('begin'); $open['tx'] = true; },
         );
         $driver->method('commit')->willReturnCallback(
-            function () use (&$txLog) { $txLog[] = 'commit'; },
+            function () use ($txLog, $open) { $txLog->append('commit'); $open['tx'] = false; },
         );
         $driver->method('rollback')->willReturnCallback(
-            function () use (&$txLog) { $txLog[] = 'rollback'; },
+            function () use ($txLog, $open) { $txLog->append('rollback'); $open['tx'] = false; },
+        );
+        $driver->method('inTransaction')->willReturnCallback(
+            static fn(): bool => (bool) $open['tx'],
         );
 
         $schema = $this->createStub(SchemaBuilderInterface::class);
@@ -75,7 +87,7 @@ final class TransactionlessMigrationTest extends TestCase
             allOrNothing:  $allOrNothing,
         );
 
-        return [$runner, &$txLog];
+        return [$runner, $txLog];
     }
 
     public function test_transactionless_migration_runs_with_no_transaction(): void
@@ -92,7 +104,7 @@ final class TransactionlessMigrationTest extends TestCase
         // a_plain: begin/commit ; b_txless: NOTHING ; c_plain: begin/commit
         $this->assertSame(
             ['begin', 'commit', 'begin', 'commit'],
-            $txLog,
+            $txLog->getArrayCopy(),
             'txless migration must not be wrapped in a transaction',
         );
     }
@@ -113,7 +125,7 @@ final class TransactionlessMigrationTest extends TestCase
         // → begin(reopen) → [c inside] → commit(final)
         $this->assertSame(
             ['begin', 'commit', 'begin', 'commit'],
-            $txLog,
+            $txLog->getArrayCopy(),
         );
     }
 
@@ -126,7 +138,7 @@ final class TransactionlessMigrationTest extends TestCase
 
         $runner->run();
 
-        $this->assertSame([], $txLog, 'no transactions for an all-txless batch');
+        $this->assertSame([], $txLog->getArrayCopy(), 'no transactions for an all-txless batch');
     }
 
     public function test_all_or_nothing_all_txless_opens_then_immediately_commits(): void
@@ -144,12 +156,12 @@ final class TransactionlessMigrationTest extends TestCase
         // → begin(reopen) → commit(final)
         $this->assertSame(
             ['begin', 'commit', 'begin', 'commit', 'begin', 'commit'],
-            $txLog,
+            $txLog->getArrayCopy(),
         );
         // every begin is paired with a commit, none left dangling
         $this->assertSame(
-            count(array_filter($txLog, fn($x) => $x === 'begin')),
-            count(array_filter($txLog, fn($x) => $x === 'commit')),
+            count(array_filter($txLog->getArrayCopy(), fn($x) => $x === 'begin')),
+            count(array_filter($txLog->getArrayCopy(), fn($x) => $x === 'commit')),
         );
     }
 }

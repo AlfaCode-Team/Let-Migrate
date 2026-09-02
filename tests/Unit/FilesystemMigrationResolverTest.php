@@ -20,10 +20,17 @@ final class FilesystemMigrationResolverTest extends TestCase
 
     protected function tearDown(): void
     {
-        foreach (glob($this->dir . '/*.php') ?: [] as $f) {
-            unlink($f);
+        // Every entry, not just *.php — a test writing anything else left the
+        // directory non-empty and rmdir() warned instead of cleaning up.
+        foreach (glob($this->dir . '/{,.}*', GLOB_BRACE) ?: [] as $f) {
+            if (is_file($f)) {
+                unlink($f);
+            }
         }
-        rmdir($this->dir);
+
+        if (is_dir($this->dir)) {
+            rmdir($this->dir);
+        }
     }
 
     // ── Resolve ───────────────────────────────────────────────────
@@ -84,7 +91,11 @@ final class FilesystemMigrationResolverTest extends TestCase
         $resolver = new FilesystemMigrationResolver();
         $resolver->addPath($this->dir);
 
-        $this->assertContains($this->dir, $resolver->paths());
+        // addPath() canonicalises with realpath(), which is what makes its
+        // duplicate check work. Compare against the canonical form: on macOS
+        // sys_get_temp_dir() reports /var/... while /var is a symlink to
+        // /private/var, so the raw string would never match.
+        $this->assertContains(realpath($this->dir), $resolver->paths());
     }
 
     public function test_add_path_throws_for_nonexistent_directory(): void

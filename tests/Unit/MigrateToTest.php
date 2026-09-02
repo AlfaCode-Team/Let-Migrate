@@ -41,18 +41,38 @@ final class MigrateToTest extends TestCase
 
     private function runner(array $all, array $applied): array
     {
-        $logged  = [];
-        $removed = [];
+        // ArrayObject, not array: `[$runner, $logged] = $this->runner(...)`
+        // copies the element by VALUE at destructuring time — before
+        // migrateTo() runs — so a plain array recorder is a snapshot of the
+        // empty list and can never observe an append.
+        $logged  = new \ArrayObject();
+        $removed = new \ArrayObject();
 
         $repo = $this->createStub(MigrationRepositoryInterface::class);
         $repo->method('ensureTable')->willReturnCallback(fn() => null);
         $repo->method('appliedFilenames')->willReturn($applied);
-        $repo->method('lastBatch')->willReturn($applied === [] ? 0 : 1);
+        $repo->method('lastBatch')->willReturn(count($applied));
+
+        // One migration per BATCH — lastApplied() steps by batch, so without
+        // these every applied migration shares batch 0 and a one-step
+        // rollback takes all of them.
+        $repo->method('all')->willReturnCallback(
+            static function () use ($applied) {
+                $batch = 0;
+
+                return array_map(
+                    static function (string $m) use (&$batch): object {
+                        return (object) ['migration' => $m, 'batch' => ++$batch];
+                    },
+                    array_values($applied),
+                );
+            },
+        );
         $repo->method('log')->willReturnCallback(
-            function (string $f, int $b) use (&$logged) { $logged[] = $f; },
+            function (string $f, int $b) use ($logged) { $logged->append($f); },
         );
         $repo->method('remove')->willReturnCallback(
-            function (string $f) use (&$removed) { $removed[] = $f; },
+            function (string $f) use ($removed) { $removed->append($f); },
         );
 
         $resolver = $this->createStub(MigrationResolverInterface::class);
@@ -73,7 +93,7 @@ final class MigrateToTest extends TestCase
             transactional: true,
         );
 
-        return [$runner, &$logged, &$removed];
+        return [$runner, $logged, $removed];
     }
 
     public function test_migrate_to_up_applies_pending_through_target(): void
@@ -83,7 +103,7 @@ final class MigrateToTest extends TestCase
 
         $result = $runner->migrateTo('m5');
 
-        $this->assertSame(['m4', 'm5'], $logged);
+        $this->assertSame(['m4', 'm5'], $logged->getArrayCopy());
         $this->assertSame(['m4', 'm5'], $result->applied ?? $result->getApplied());
     }
 
@@ -95,7 +115,7 @@ final class MigrateToTest extends TestCase
         $runner->migrateTo('m1');
 
         // roll back everything after m1, newest first
-        $this->assertSame(['m3', 'm2'], $removed);
+        $this->assertSame(['m3', 'm2'], $removed->getArrayCopy());
     }
 
     public function test_migrate_to_current_is_noop(): void
@@ -105,8 +125,8 @@ final class MigrateToTest extends TestCase
 
         $runner->migrateTo('m3');
 
-        $this->assertSame([], $logged);
-        $this->assertSame([], $removed);
+        $this->assertSame([], $logged->getArrayCopy());
+        $this->assertSame([], $removed->getArrayCopy());
     }
 
     public function test_migrate_to_partial_down(): void
@@ -116,7 +136,7 @@ final class MigrateToTest extends TestCase
 
         $runner->migrateTo('m2');
 
-        $this->assertSame(['m3'], $removed);
+        $this->assertSame(['m3'], $removed->getArrayCopy());
     }
 
     public function test_unknown_target_throws(): void
@@ -137,6 +157,6 @@ final class MigrateToTest extends TestCase
 
         $runner->migrateTo('m2');
 
-        $this->assertSame(['m1', 'm2'], $logged);
+        $this->assertSame(['m1', 'm2'], $logged->getArrayCopy());
     }
 }

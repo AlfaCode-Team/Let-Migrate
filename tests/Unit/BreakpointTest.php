@@ -10,6 +10,7 @@ use AlfaCode\LetMigrate\Contract\MigrationRepositoryInterface;
 use AlfaCode\LetMigrate\Contract\MigrationResolverInterface;
 use AlfaCode\LetMigrate\Contract\SchemaBuilderInterface;
 use AlfaCode\LetMigrate\Exception\MigrationException;
+use AlfaCode\LetMigrate\MigrationRecord;
 use AlfaCode\LetMigrate\BreakpointStore;
 use AlfaCode\LetMigrate\MigrationRunner;
 use PHPUnit\Framework\TestCase;
@@ -111,8 +112,18 @@ final class BreakpointTest extends TestCase
         $repo = $this->createStub(MigrationRepositoryInterface::class);
         $repo->method('ensureTable')->willReturnCallback(fn() => null);
         $repo->method('appliedFilenames')->willReturn(['m1', 'm2', 'm3']);
-        $repo->method('lastBatch')->willReturn(1);
-        $repo->method('all')->willReturn([]);
+        $repo->method('lastBatch')->willReturn(3);
+
+        // One migration per BATCH. MigrationRunner::lastApplied() counts steps
+        // as BATCHES, not as individual migrations, so without these records
+        // every migration falls into batch 0 and "roll back one step" means
+        // roll back all three — which made a breakpoint anywhere look like it
+        // blocked everything, and hid whether the guard scopes correctly.
+        $repo->method('all')->willReturn([
+            new MigrationRecord(1, 'm1', 1, '2024-01-01 00:00:00'),
+            new MigrationRecord(2, 'm2', 2, '2024-01-02 00:00:00'),
+            new MigrationRecord(3, 'm3', 3, '2024-01-03 00:00:00'),
+        ]);
         $repo->method('remove')->willReturnCallback(fn() => null);
 
         $resolver = $this->createStub(MigrationResolverInterface::class);
