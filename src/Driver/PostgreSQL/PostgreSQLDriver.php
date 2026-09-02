@@ -39,7 +39,7 @@ final class PostgreSQLDriver extends AbstractPdoDriver
     public function tableExists(string $table): bool
     {
         $row = $this->fetchOne(
-            'SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = $1 LIMIT 1',
+            'SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = ? LIMIT 1',
             [$table],
         );
 
@@ -49,7 +49,7 @@ final class PostgreSQLDriver extends AbstractPdoDriver
     public function columnExists(string $table, string $column): bool
     {
         $row = $this->fetchOne(
-            'SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2 LIMIT 1',
+            'SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = ? AND column_name = ? LIMIT 1',
             [$table, $column],
         );
 
@@ -59,7 +59,7 @@ final class PostgreSQLDriver extends AbstractPdoDriver
     public function listColumns(string $table): array
     {
         $rows = $this->fetchAll(
-            'SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 ORDER BY ordinal_position',
+            'SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = ? ORDER BY ordinal_position',
             [$table],
         );
 

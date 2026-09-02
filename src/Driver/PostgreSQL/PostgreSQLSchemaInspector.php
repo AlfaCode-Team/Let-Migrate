@@ -25,7 +25,7 @@ final class PostgreSQLSchemaInspector implements SchemaInspectorInterface
     {
         $rows = $this->driver->fetchAll(
             "SELECT table_name FROM information_schema.tables
-             WHERE table_schema = $1 AND table_type = 'BASE TABLE'
+             WHERE table_schema = ? AND table_type = 'BASE TABLE'
              ORDER BY table_name",
             [$this->schema],
         );
@@ -54,12 +54,15 @@ final class PostgreSQLSchemaInspector implements SchemaInspectorInterface
                   ON tc.constraint_name = kcu.constraint_name
                  AND tc.table_schema    = kcu.table_schema
                 WHERE tc.constraint_type = 'PRIMARY KEY'
-                  AND tc.table_schema    = $1
-                  AND tc.table_name      = $2
+                  AND tc.table_schema    = ?
+                  AND tc.table_name      = ?
              ) pk ON pk.column_name = c.column_name
-             WHERE c.table_schema = $1 AND c.table_name = $2
+             WHERE c.table_schema = ? AND c.table_name = ?
              ORDER BY c.ordinal_position",
-            [$this->schema, $table],
+            // FOUR placeholders, not two. `?` is positional and cannot be
+            // reused the way libpq's $1 can, so schema/table are bound twice,
+            // in the order the placeholders appear above.
+            [$this->schema, $table, $this->schema, $table],
         );
 
         return array_map(static fn(array $r) => ColumnMeta::fromRow([
@@ -81,7 +84,7 @@ final class PostgreSQLSchemaInspector implements SchemaInspectorInterface
         $rows = $this->driver->fetchAll(
             "SELECT indexname AS name, indexdef AS def
              FROM pg_indexes
-             WHERE schemaname = $1 AND tablename = $2",
+             WHERE schemaname = ? AND tablename = ?",
             [$this->schema, $table],
         );
 
@@ -95,7 +98,7 @@ final class PostgreSQLSchemaInspector implements SchemaInspectorInterface
              FROM pg_constraint c
              JOIN pg_class t ON t.oid = c.conrelid
              JOIN pg_namespace n ON n.oid = t.relnamespace
-             WHERE n.nspname = $1 AND t.relname = $2
+             WHERE n.nspname = ? AND t.relname = ?
                AND c.contype IN ('p','u')",
             [$this->schema, $table],
         );
@@ -142,7 +145,7 @@ final class PostgreSQLSchemaInspector implements SchemaInspectorInterface
              JOIN pg_attribute a   ON a.attrelid = t.oid AND a.attnum = c.conkey[1]
              JOIN pg_class ref_t   ON ref_t.oid = c.confrelid
              JOIN pg_attribute ref_a ON ref_a.attrelid = ref_t.oid AND ref_a.attnum = c.confkey[1]
-             WHERE c.contype = 'f' AND n.nspname = $1 AND t.relname = $2",
+             WHERE c.contype = 'f' AND n.nspname = ? AND t.relname = ?",
             [$this->schema, $table],
         );
 
